@@ -1,0 +1,25 @@
+{
+  "name": "@kefu/web",
+  "version": "0.1.0",
+  "private": true,
+  "description": "React + Vite web client for the kefu-saas platform (dev bootstrap status console).",
+  "scripts": {
+    "dev": "node server.js",
+    "build": "node scripts/check.cjs",
+    "preview": "node server.js",
+    "typecheck": "node scripts/check.cjs",
+    "clean": "node -e \"require('node:fs').rmSync('dist',{recursive:true,force:true})\""
+  },
+  "dependencies": {
+    "lucide-react": "^0.468.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  },
+  "devDependencies": {
+    "@types/react": "^18.3.12",
+    "@types/react-dom": "^18.3.1",
+    "@vitejs/plugin-react": "^4.3.4",
+    "typescript": "~5.6.3",
+    "vite": "^5.4.11"
+  }
+}

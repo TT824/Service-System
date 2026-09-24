@@ -1,0 +1,150 @@
+<!-- 商家管理员：渠道、自动回复和成员 -->
+<section id="settings" class="page">
+  <div class="page-header">
+    <div>
+      <h1>
+        设置
+      </h1>
+      <div class="page-desc">
+        配置店铺的微信客服接入、基础自动回复与成员权限。
+      </div>
+    </div>
+  </div>
+  <div class="panel">
+    <div class="panel-head">
+      <span class="panel-title">
+        渠道连接
+      </span>
+      <span class="pill green">
+        <span class="live-dot">
+        </span>
+        已连接
+      </span>
+    </div>
+    <div class="setting-row">
+      <div>
+        <div class="setting-title">
+          企业微信 · 微信客服
+        </div>
+        <div class="setting-desc">
+          当前授权客服账号：小唛生活旗舰店客服。首版仅接入此渠道。
+        </div>
+      </div>
+      <button class="btn" data-demo="查看连接详情">
+        查看连接
+      </button>
+    </div>
+  </div>
+  <div class="panel">
+    <div class="panel-head">
+      <span class="panel-title">
+        基础自动回复
+      </span>
+    </div>
+    <div class="setting-row">
+      <div>
+        <div class="setting-title">
+          欢迎语
+        </div>
+        <div class="setting-desc">
+          客户进入会话时发送一次。实际外发额度计数需按渠道验证结果配置。
+        </div>
+      </div>
+      <button class="btn" data-demo="编辑欢迎语">
+        编辑
+      </button>
+    </div>
+    <div class="setting-row">
+      <div>
+        <div class="setting-title">
+          离线回复
+        </div>
+        <div class="setting-desc">
+          全店无人在线接单时发送一次；系统将在有客服在线后分配会话。
+        </div>
+      </div>
+      <button class="btn" data-demo="编辑离线回复">
+        编辑
+      </button>
+    </div>
+  </div>
+  <div class="panel">
+    <div class="panel-head">
+      <span class="panel-title">
+        客服成员与店铺范围
+      </span>
+      <button class="btn" data-demo="添加客服成员">
+        添加成员
+      </button>
+    </div>
+    <table class="table">
+      <thead>
+        <tr>
+          <th>
+            成员
+          </th>
+          <th>
+            角色
+          </th>
+          <th>
+            可访问店铺
+          </th>
+          <th>
+            当前状态
+          </th>
+          <th>
+            操作
+          </th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>
+            <strong>
+              陈小雨
+            </strong>
+          </td>
+          <td>
+            <span id="settings-role-chen">客服</span>
+          </td>
+          <td>
+            旗舰店、家居店
+          </td>
+          <td>
+            <span class="pill green">
+              在线接单
+            </span>
+          </td>
+          <td>
+            <button class="small-link" type="button" data-admin-permissions="chen">
+              编辑
+            </button>
+          </td>
+        </tr>
+        <tr>
+          <td>
+            <strong>
+              王一帆
+            </strong>
+          </td>
+          <td>
+            <span id="settings-role-wang">客服</span>
+          </td>
+          <td>
+            旗舰店
+          </td>
+          <td>
+            <span class="pill orange">
+              挂起
+            </span>
+          </td>
+          <td>
+            <button class="small-link" type="button" data-admin-permissions="wang">
+              编辑
+            </button>
+          </td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+</section>

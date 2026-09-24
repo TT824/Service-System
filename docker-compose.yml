@@ -1,0 +1,91 @@
+# =============================================================================
+# kefu-saas local infrastructure
+#
+# Starts only the services the platform depends on during SDD-002: PostgreSQL
+# with pgvector, Redis, and a MinIO-compatible object store. The API, worker
+# and web applications run on the host through `npm run dev:*` so their code
+# can hot-reload without rebuilding containers.
+#
+# All credentials below are development defaults that mirror `.env.example`.
+# They are intentionally weak and must be overridden for any shared or
+# production deployment.
+# =============================================================================
+
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-kefu}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-kefu}
+      POSTGRES_DB: ${POSTGRES_DB:-kefu}
+    ports:
+      - '5432:5432'
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - pg_isready -U "$${POSTGRES_USER}" -d "$${POSTGRES_DB}"
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 5s
+
+  redis:
+    image: redis:7-alpine
+    command: ['redis-server', '--appendonly', 'yes']
+    ports:
+      - '6379:6379'
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 3s
+
+  minio:
+    image: quay.io/minio/minio
+    command: ['server', '/data', '--console-address', ':9001']
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minioadmin}
+    ports:
+      - '9000:9000'
+      - '9001:9001'
+    volumes:
+      - minio_data:/data
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - curl --fail --silent --show-error http://127.0.0.1:9000/minio/health/live >/dev/null
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 8s
+
+  # One-shot job that waits for MinIO to be healthy and creates the bucket
+  # referenced by OBJECT_STORAGE_BUCKET. `restart: no` keeps it a run-once
+  # initialiser; it exits 0 on success.
+  minio-init:
+    image: quay.io/minio/mc
+    depends_on:
+      minio:
+        condition: service_healthy
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minioadmin}
+      MINIO_BUCKET: ${MINIO_BUCKET:-media}
+    entrypoint: ['/bin/sh', '-c']
+    command:
+      - >-
+        mc alias set local http://minio:9000 "$${MINIO_ROOT_USER}"
+        "$${MINIO_ROOT_PASSWORD}" &&
+        mc mb -p "local/$${MINIO_BUCKET}"
+    restart: 'no'
+
+volumes:
+  postgres_data:
+  redis_data:
+  minio_data:

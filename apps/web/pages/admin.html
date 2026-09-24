@@ -1,0 +1,79 @@
+<!-- 企业管理员中心：员工服务表现、权限、分流资格和聊天记录。 -->
+<section id="admin" class="page admin-page">
+  <div class="admin-heading">
+    <div>
+      <div class="admin-eyebrow">小唛生活 · 企业内部管理</div>
+      <h1>管理员中心</h1>
+      <p>查看员工服务表现，管理权限与接待配置。</p>
+    </div>
+    <span class="admin-demo-badge">原型演示数据</span>
+  </div>
+  <div class="admin-subnav" aria-label="管理员功能">
+    <button class="active" type="button" data-admin-view="overview">概览</button>
+    <button type="button" data-admin-view="staff">员工数据</button>
+    <button type="button" data-admin-view="compare">员工对比</button>
+    <button type="button" data-admin-view="permissions">权限管理</button>
+    <button type="button" data-admin-view="routing">员工分流</button>
+    <button type="button" data-admin-view="records">聊天记录</button>
+    <button type="button" data-admin-view="audit">操作日志</button>
+  </div>
+  <div class="admin-filter-bar" id="admin-filter-bar">
+    <span>统计周期</span>
+    <select id="admin-period" class="selector" aria-label="统计周期">
+      <option value="day">本日</option><option value="week">本周</option><option value="month">本月</option>
+    </select>
+    <span class="admin-filter-note">付款人数、付款金额为演示值；真实数据需订单系统回传并确认归因口径。</span>
+  </div>
+
+  <div id="admin-view-overview" class="admin-view">
+    <div id="admin-overview-stats" class="admin-overview-stats"></div>
+    <div class="admin-group-heading"><h2>服务数据</h2><span>查看员工表现和接待质量</span></div>
+    <div class="admin-tool-grid">
+      <button class="admin-tool-card" type="button" data-admin-view="staff"><span class="admin-tool-icon blue">▥</span><span><strong>员工数据</strong><small>接单量、付款转化、响应时长与满意度</small></span><span class="admin-tool-arrow">→</span></button>
+      <button class="admin-tool-card" type="button" data-admin-view="compare"><span class="admin-tool-icon green">▤</span><span><strong>员工对比</strong><small>用柱状图和明细表比较团队表现</small></span><span class="admin-tool-arrow">→</span></button>
+      <button class="admin-tool-card" type="button" data-admin-view="records"><span class="admin-tool-icon orange">☷</span><span><strong>聊天记录</strong><small>按员工或客户查询脱敏会话</small></span><span class="admin-tool-arrow">→</span></button>
+    </div>
+    <div class="admin-group-heading"><h2>团队管理</h2><span>管理授权和接待资格</span></div>
+    <div class="admin-tool-grid">
+      <button class="admin-tool-card" type="button" data-admin-view="permissions"><span class="admin-tool-icon purple">⚿</span><span><strong>员工权限</strong><small>授予全部管理员权限或指定功能</small></span><span class="admin-tool-arrow">→</span></button>
+      <button class="admin-tool-card" type="button" data-admin-view="routing"><span class="admin-tool-icon teal">↔</span><span><strong>员工分流</strong><small>维护接待资格，具体分配规则由后端决定</small></span><span class="admin-tool-arrow">→</span></button>
+      <button class="admin-tool-card" type="button" data-admin-view="audit"><span class="admin-tool-icon slate">✓</span><span><strong>操作日志</strong><small>查看本次演示中的权限和分流变更</small></span><span class="admin-tool-arrow">→</span></button>
+    </div>
+  </div>
+
+  <div id="admin-view-staff" class="admin-view" hidden>
+    <div class="admin-section-title"><div><h2>员工数据</h2><p>选定员工后查看当前统计周期的服务表现。</p></div><select id="admin-staff-select" class="selector" aria-label="选择员工"></select></div>
+    <div id="admin-staff-summary" class="admin-staff-summary"></div>
+    <div class="admin-panel"><h3>指标口径与数据来源</h3><div class="admin-definition-grid"><p><strong>接单量</strong>：周期内系统分配并进入接待的会话数。</p><p><strong>付款人数 / 金额</strong>：等待订单系统回传并确认归因规则。</p><p><strong>平均响应时长</strong>：周期内人工回复的平均等待时间。</p><p><strong>满意度 / 3 分钟回复率</strong>：按已采集评价和有效会话统计。</p></div></div>
+  </div>
+
+  <div id="admin-view-compare" class="admin-view" hidden>
+    <div class="admin-section-title"><div><h2>员工数据对比</h2><p>选择一个指标查看柱状图，下方表格保留所有指标。</p></div><select id="admin-compare-metric" class="selector" aria-label="对比指标"><option value="accepted">接单量</option><option value="payers">付款人数</option><option value="revenue">付款金额</option><option value="responseSeconds">平均响应时长</option><option value="satisfaction">满意度</option><option value="reply3m">3 分钟回复率</option></select></div>
+    <div class="admin-panel"><h3 id="admin-chart-title">接单量对比</h3><div id="admin-chart" class="admin-chart"></div></div>
+    <div class="admin-panel admin-table-scroll"><h3>员工明细</h3><table class="admin-data-table"><thead><tr><th>员工</th><th>接单量</th><th>付款人数</th><th>付款金额</th><th>平均响应</th><th>满意度</th><th>3 分钟回复率</th></tr></thead><tbody id="admin-compare-rows"></tbody></table></div>
+  </div>
+
+  <div id="admin-view-permissions" class="admin-view" hidden>
+    <div class="admin-section-title"><div><h2>员工权限</h2><p>可授予全部管理员功能，也可只开放指定功能。</p></div><select id="admin-permission-staff" class="selector" aria-label="选择授权员工"></select></div>
+    <div class="admin-panel"><div class="admin-permission-intro"><div><strong id="admin-permission-name"></strong><p id="admin-permission-role"></p></div><span class="pill blue">当前租户</span></div><div id="admin-permission-options" class="admin-permission-options"></div><div class="admin-actions"><button id="admin-save-permissions" class="btn primary" type="button">保存权限（演示）</button></div></div>
+    <p class="admin-muted">正式权限必须由服务端校验；界面选择不构成实际授权。保留最后一名完整管理员，避免团队失去管理入口。</p>
+  </div>
+
+  <div id="admin-view-routing" class="admin-view" hidden>
+    <div class="admin-section-title"><div><h2>员工分流</h2><p>维护员工是否参与自动接待。具体分流算法与优先级由后端确定。</p></div><span class="pill blue">规则待商定</span></div>
+    <div class="admin-routing-note"><strong>当前仅配置接待资格</strong><span>系统分配时还应结合员工在线状态、所属店铺和后端规则。页面不计算最终分配结果。</span></div>
+    <div class="admin-panel admin-table-scroll"><table class="admin-data-table"><thead><tr><th>员工</th><th>授权店铺</th><th>在线状态</th><th>参与自动接待</th></tr></thead><tbody id="admin-routing-rows"></tbody></table><div class="admin-actions"><button id="admin-save-routing" class="btn primary" type="button">保存分流资格（演示）</button></div></div>
+  </div>
+
+  <div id="admin-view-records" class="admin-view" hidden>
+    <div class="admin-section-title"><div><h2>员工聊天记录</h2><p>按员工与客户搜索，查看脱敏的会话摘要和消息。</p></div></div>
+    <div class="admin-record-filters"><input id="admin-record-search" class="search" placeholder="搜索客户、会话或消息"><select id="admin-record-staff" class="selector" aria-label="筛选员工"><option value="all">全部员工</option></select></div>
+    <div class="admin-panel admin-table-scroll"><table class="admin-data-table"><thead><tr><th>客户</th><th>接待员工</th><th>店铺</th><th>时间</th><th>状态</th><th>操作</th></tr></thead><tbody id="admin-record-rows"></tbody></table></div>
+    <div id="admin-record-detail" class="admin-panel admin-record-detail" hidden></div>
+  </div>
+
+  <div id="admin-view-audit" class="admin-view" hidden>
+    <div class="admin-section-title"><div><h2>操作日志</h2><p>记录本次页面会话中的演示变更。</p></div></div>
+    <div id="admin-audit-rows" class="admin-panel"></div>
+  </div>
+</section>

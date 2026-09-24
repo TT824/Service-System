@@ -1,0 +1,101 @@
+<!-- 所有用户：账号中心与配置状态 -->
+<section id="account" class="page">
+  <div class="page-header">
+    <div>
+      <h1>
+        账号中心
+      </h1>
+      <div class="page-desc">
+        管理登录方式、受信设备并查看租户业务权限配置状态。
+      </div>
+    </div>
+    <button class="btn" id="open-login">
+      退出登录
+    </button>
+  </div>
+  <div class="two-col">
+    <div class="panel">
+      <div class="panel-head">
+        <span class="panel-title">
+          个人资料
+        </span>
+        <span class="pill green">
+          账号正常
+        </span>
+      </div>
+      <div class="setting-row">
+        <div>
+          <div class="setting-title" id="account-name">陈小雨</div>
+          <div class="setting-desc">
+            手机号：<span id="account-phone">138****2068</span> · 当前演示角色：
+            <span id="account-role">
+              商家管理员
+            </span>
+          </div>
+        </div>
+        <button class="btn" id="account-edit-info" type="button">
+          编辑
+        </button>
+      </div>
+      <div class="setting-row">
+        <div>
+          <div class="setting-title">
+            账号登录
+          </div>
+          <div class="setting-desc">
+            可使用手机号和账号登录，也可通过手机验证码找回密码。
+          </div>
+        </div>
+        <button class="btn" id="account-change-password" type="button">
+          管理
+        </button>
+      </div>
+      <div class="setting-row">
+        <div>
+          <div class="setting-title">
+            SSO 绑定
+          </div>
+          <div class="setting-desc">
+            绑定前需要完成本地账号验证。
+          </div>
+        </div>
+        <button class="btn" data-demo="绑定 SSO">
+          绑定
+        </button>
+      </div>
+    </div>
+    <div class="panel">
+      <div class="panel-head">
+        <span class="panel-title">
+          组织与设备
+        </span>
+      </div>
+      <div class="setting-row">
+        <div>
+          <div class="setting-title">
+            租户与店铺范围
+          </div>
+          <div class="setting-desc">
+            小唛生活 · 旗舰店、家居店。新注册用户在管理员配置前，只能访问此账号中心。
+          </div>
+        </div>
+        <span class="pill green">
+          已配置
+        </span>
+      </div>
+      <div class="setting-row">
+        <div>
+          <div class="setting-title">
+            已记住的设备
+          </div>
+          <div class="setting-desc">
+            Windows · Edge · 最近使用 09月22日。受信设备可过期和撤销。
+          </div>
+        </div>
+        <button class="btn" data-demo="撤销受信设备">
+          管理
+        </button>
+      </div>
+    </div>
+  </div>
+</section>

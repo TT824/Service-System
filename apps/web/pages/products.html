@@ -1,0 +1,243 @@
+<!-- 商家管理员：商品库 -->
+<section id="products" class="page">
+  <div class="page-header">
+    <div>
+      <h1>
+        商品库
+      </h1>
+      <div class="page-desc">
+        管理商品款式、规格与资料快照。导入后系统异步建立检索索引。
+      </div>
+    </div>
+    <div class="page-actions">
+      <button class="btn" id="download-template">
+        下载导入模板
+      </button>
+      <button class="btn primary" id="import-products">
+        导入 Excel / CSV
+      </button>
+    </div>
+  </div>
+  <div class="stat-grid">
+    <div class="stat">
+      <div class="stat-label">
+        商品款式 SPU
+      </div>
+      <div class="stat-value">
+        286
+      </div>
+      <div class="stat-note">
+        首批试点上限 300
+      </div>
+    </div>
+    <div class="stat">
+      <div class="stat-label">
+        规格 SKU
+      </div>
+      <div class="stat-value">
+        742
+      </div>
+      <div class="stat-note">
+        含颜色、容量等变体
+      </div>
+    </div>
+    <div class="stat">
+      <div class="stat-label">
+        索引已就绪
+      </div>
+      <div class="stat-value">
+        281
+      </div>
+      <div class="stat-note">
+        5 个商品正在处理
+      </div>
+    </div>
+    <div class="stat">
+      <div class="stat-label">
+        待修复数据
+      </div>
+      <div class="stat-value">
+        3
+      </div>
+      <div class="stat-note">
+        可下载错误明细
+      </div>
+    </div>
+  </div>
+  <div class="panel">
+    <div class="panel-head">
+      <span class="panel-title">
+        商品列表
+      </span>
+      <span class="pill blue">
+        当前店铺
+      </span>
+    </div>
+    <div class="filter-row">
+      <input class="search" placeholder="搜索商品名称、SPU、型号">
+      <select class="selector">
+        <option>
+          全部类目
+        </option>
+        <option>
+          家居用品
+        </option>
+        <option>
+          数码配件
+        </option>
+      </select>
+      <select class="selector">
+        <option>
+          全部索引状态
+        </option>
+        <option>
+          已就绪
+        </option>
+        <option>
+          处理中
+        </option>
+        <option>
+          异常
+        </option>
+      </select>
+    </div>
+    <table class="table">
+      <thead>
+        <tr>
+          <th>
+            商品 / SPU
+          </th>
+          <th>
+            类目
+          </th>
+          <th>
+            SKU
+          </th>
+          <th>
+            资料更新
+          </th>
+          <th>
+            索引状态
+          </th>
+          <th>
+            操作
+          </th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>
+            <strong>
+              轻享保温杯 500ml
+            </strong>
+            <br>
+            SPU-202609-0081
+          </td>
+          <td>
+            水杯
+          </td>
+          <td>
+            2
+          </td>
+          <td>
+            09月22日 08:30
+          </td>
+          <td>
+            <span class="pill green">
+              已就绪
+            </span>
+          </td>
+          <td>
+            <button class="small-link" data-demo="查看商品资料">
+              查看资料
+            </button>
+          </td>
+        </tr>
+        <tr>
+          <td>
+            <strong>
+              轻享保温杯 350ml
+            </strong>
+            <br>
+            SPU-202609-0082
+          </td>
+          <td>
+            水杯
+          </td>
+          <td>
+            3
+          </td>
+          <td>
+            09月22日 08:30
+          </td>
+          <td>
+            <span class="pill green">
+              已就绪
+            </span>
+          </td>
+          <td>
+            <button class="small-link" data-demo="查看商品资料">
+              查看资料
+            </button>
+          </td>
+        </tr>
+        <tr>
+          <td>
+            <strong>
+              简约收纳架 三层
+            </strong>
+            <br>
+            SPU-202609-0146
+          </td>
+          <td>
+            家居
+          </td>
+          <td>
+            4
+          </td>
+          <td>
+            09月21日 17:10
+          </td>
+          <td>
+            <span class="pill orange">
+              处理中
+            </span>
+          </td>
+          <td>
+            <button class="small-link" data-demo="查看商品资料">
+              查看资料
+            </button>
+          </td>
+        </tr>
+        <tr>
+          <td>
+            <strong>
+              旅行充电器 65W
+            </strong>
+            <br>
+            SPU-202609-0252
+          </td>
+          <td>
+            数码
+          </td>
+          <td>
+            2
+          </td>
+          <td>
+            09月20日 11:28
+          </td>
+          <td>
+            <span class="pill orange">
+              字段待修复
+            </span>
+          </td>
+          <td>
+            <button class="small-link" data-demo="查看错误明细">
+              查看错误
+            </button>
+          </td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+</section>

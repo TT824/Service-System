@@ -1,0 +1,24 @@
+{
+  "name": "@kefu/wecom",
+  "version": "0.1.0",
+  "private": true,
+  "description": "App-neutral WeCom channel transports: outbound HTTP port, access-token provider, kf/send_msg sender and the deterministic in-process Mock, shared by the API and the Worker.",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "clean": "node -e \"require('node:fs').rmSync('dist',{recursive:true,force:true})\"",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@kefu/core": "0.1.0",
+    "ioredis": "^5.11.1"
+  },
+  "devDependencies": {
+    "@types/node": "^22.7.5",
+    "typescript": "~5.6.3"
+  }
+}

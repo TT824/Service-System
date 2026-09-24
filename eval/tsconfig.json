@@ -1,0 +1,10 @@
+{
+  "extends": "../apps/api/tsconfig.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "rootDir": "..",
+    "declaration": true,
+    "declarationMap": false
+  },
+  "include": ["./**/*.ts", "../apps/api/src/**/*.ts"]
+}

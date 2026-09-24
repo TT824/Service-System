@@ -1,0 +1,49 @@
+{
+  "generatedAt": "2026-09-20T07:49:24.089Z",
+  "seed": 20260920,
+  "tenant": "tenant-acme",
+  "store": "store-acme-flagship",
+  "licence": "验证集冻结：改了 queries.validation.json 就必须重新生成并在这里记下新的 sha256。",
+  "catalogue": {
+    "spus": 3634,
+    "skus": 14996,
+    "maxUpdatedAt": "2026-09-20T07:14:56.593Z",
+    "titleByIdSample": [
+      [
+        "spu-003748ae-570b-4f50-b1d1-c2ce55fbe204",
+        "CC 孟令丰家丘比小狗"
+      ],
+      [
+        "spu-005e2c5c-a5f2-480c-9c8c-0c8547477d63",
+        "CJB*臻奢美肌养肤贵妇膏"
+      ],
+      [
+        "spu-006983a7-2421-4687-92c3-0440351afd98",
+        "金燕耳—高山银耳炖马蹄"
+      ]
+    ]
+  },
+  "dev": {
+    "file": "queries.dev.json",
+    "count": 120,
+    "sha256": "7a18deb75013f31a2c41623d3ba4942c163c850eca25309734e08f5d3d8b7ee6"
+  },
+  "validation": {
+    "file": "queries.validation.json",
+    "count": 214,
+    "sha256": "82168680bf8f5513a8b4b6d474274e326cae3e6a041ebc00c794da798a684cf6"
+  },
+  "types": {
+    "family": 130,
+    "color": 131,
+    "code": 34,
+    "size": 9,
+    "negation": 30
+  },
+  "vocabulary": {
+    "colors": 39,
+    "sizes": 9,
+    "phrases": 203
+  },
+  "probes": 800
+}

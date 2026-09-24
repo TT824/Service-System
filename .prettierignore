@@ -1,0 +1,15 @@
+node_modules/
+dist/
+coverage/
+.codex/
+work/
+outputs/
+package-lock.json
+*.md
+
+# 评测集是**冻结**产物：manifest 里记的是它们的 sha256。格式化工具改一个字节，
+# 冻结校验就会（正确地）判本次评测作废 —— 所以它们不归 prettier 管，
+# 由 eval/generate-queries.cjs 自己写。
+eval/queries.dev.json
+eval/queries.validation.json
+eval/manifest.json

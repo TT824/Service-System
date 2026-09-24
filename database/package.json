@@ -1,0 +1,19 @@
+{
+  "name": "@kefu/database",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Database migration layout for the kefu-saas monorepo (SQL up/down files plus a small runner).",
+  "scripts": {
+    "migrate": "node scripts/migrate.cjs migrate",
+    "rollback": "node scripts/migrate.cjs rollback",
+    "status": "node scripts/migrate.cjs status",
+    "check": "node scripts/check.cjs",
+    "seed": "node scripts/seed.cjs",
+    "prune": "node scripts/prune.cjs",
+    "clean": "node -e \"require('node:fs').rmSync('dist',{recursive:true,force:true})\"",
+    "create-account": "node scripts/create-account.cjs"
+  },
+  "dependencies": {
+    "pg": "^8.23.0"
+  }
+}

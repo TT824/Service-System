@@ -1,0 +1,300 @@
+<!-- 客服工作台：顶部客服状态与指标、会话池、对话、AI 候选与商品资料 -->
+<section id="workspace" class="workspace active">
+  <!-- 工作台顶部指标：首版显示已有口径；订单、满意度与转化指标等待业务系统接入。 -->
+  <div class="workspace-overview">
+    <div class="agent-summary">
+      <div class="agent-avatar" aria-hidden="true"><span id="agent-avatar-initial">陈</span><img id="agent-avatar-image" alt="" hidden></div>
+      <div class="agent-summary-content">
+        <div class="agent-name"><span id="agent-name-label">陈小雨</span> <span class="agent-store">客服工作台</span></div>
+        <div class="agent-controls">
+          <!-- 客服接待状态：退出是账号操作，其他选项才是接待状态。 -->
+          <div id="presence-control" class="presence-control" data-state="online">
+            <button id="status-trigger" class="status-trigger" type="button" aria-label="客服接待状态：在线" aria-haspopup="menu" aria-controls="status-menu" aria-expanded="false">
+              <span class="presence-dot" aria-hidden="true"></span><span id="status-label">在线</span><span class="presence-chevron" aria-hidden="true">⌄</span>
+            </button>
+            <div id="status-menu" class="status-menu" role="menu" aria-label="切换客服接待状态" hidden>
+              <button class="status-option" type="button" role="menuitemradio" aria-checked="true" data-presence="online"><span class="presence-dot" aria-hidden="true"></span><span class="status-option-copy"><strong>在线</strong><small>可接待买家</small></span><span class="status-check" aria-hidden="true">✓</span></button>
+              <button class="status-option" type="button" role="menuitemradio" aria-checked="false" data-presence="suspended"><span class="presence-dot" aria-hidden="true"></span><span class="status-option-copy"><strong>挂起</strong><small>可处理当前会话，不接新单</small></span><span class="status-check" aria-hidden="true">✓</span></button>
+              <button class="status-option" type="button" role="menuitemradio" aria-checked="false" data-presence="offline"><span class="presence-dot" aria-hidden="true"></span><span class="status-option-copy"><strong>离线</strong><small>停止接待和发送客服消息</small></span><span class="status-check" aria-hidden="true">✓</span></button>
+              <div class="status-menu-divider"></div>
+              <button class="status-option exit" type="button" role="menuitem" data-presence="exit"><span class="presence-dot" aria-hidden="true"></span><span class="status-option-copy"><strong>退出</strong><small>退出当前演示账号</small></span></button>
+            </div>
+          </div>
+          <button id="assist-toggle" class="assist-toggle" type="button" aria-pressed="true">◉ 停止辅助</button>
+        </div>
+        <div id="agent-presence-note" class="agent-presence-note" role="status" hidden></div>
+      </div>
+    </div>
+    <div class="overview-metrics" aria-label="客服工作台指标">
+      <div class="overview-metric" title="演示会话中的今日接待数"><strong id="today-served">3</strong><span>今日接待</span></div>
+      <div class="overview-metric pending" title="需要订单系统，第二期接入"><strong>—</strong><span>未下单</span></div>
+      <div class="overview-metric pending" title="需要订单系统，第二期接入"><strong>—</strong><span>未付款</span></div>
+      <div class="overview-metric pending" title="需要订单系统，第二期接入"><strong>—</strong><span>已付款</span></div>
+      <div class="overview-metric pending" title="满意度采集属于第二期"><strong>—</strong><span>昨日满意度</span></div>
+      <div class="overview-metric pending" title="需后端提供三分钟响应率统计"><strong>—</strong><span>昨日3分钟响应率</span></div>
+      <div class="overview-metric" title="演示数据；实际以人工首条回复口径统计"><strong>42<small>秒</small></strong><span>昨日平均首响</span></div>
+      <div class="overview-metric pending" title="需要交易转化反馈，第二期接入"><strong>—</strong><span>询单转化率</span></div>
+    </div>
+    <button id="overview-toggle" class="overview-toggle" type="button" aria-expanded="false" aria-controls="overview-details">展开 <span aria-hidden="true">⌄</span></button>
+    <div id="overview-details" class="overview-details" hidden>
+      <div class="overview-detail"><span>会话分配</span><strong>系统自动</strong></div>
+      <div class="overview-detail"><span>候选采纳率</span><strong>63.8%</strong></div>
+      <div class="overview-detail"><span>手打率</span><strong>17.6%</strong></div>
+      <p>以上为原型演示数据。订单、满意度和转化指标将在对应业务系统接入后显示。</p>
+    </div>
+  </div>
+  <aside class="queue">
+    <div class="queue-head">
+      <h1 class="section-title" id="queue-title">会话工作台</h1>
+      <input id="conversation-search" class="search" placeholder="搜索客户或会话内容">
+      <input id="contact-search" class="search" placeholder="搜索姓名或分组" hidden>
+    </div>
+    <div class="queue-tabs" aria-label="左侧列表类型">
+      <button class="queue-tab active" type="button" data-queue-mode="conversations" aria-pressed="true">我的会话 <span id="active-conversation-count">4</span></button>
+      <button class="queue-tab" type="button" data-queue-mode="contacts" aria-pressed="false">联系人</button>
+    </div>
+    <!-- 系统分配的会话按处理中和已结束分类，历史消息保留供查看。 -->
+    <div id="conversation-panel" class="queue-panel">
+      <div class="conversation-status-tabs" aria-label="会话状态">
+        <button class="active" type="button" data-conversation-status="active" aria-pressed="true">处理中 <span id="processing-count">4</span></button>
+        <button type="button" data-conversation-status="ended" aria-pressed="false">已结束 <span id="ended-count">1</span></button>
+      </div>
+      <div class="queue-meta">
+        <span id="queue-caption">接待中 · 按最近消息排序</span>
+        <span>共 <span id="queue-count">4</span> 条</span>
+      </div>
+      <div class="conversations" id="conversations"></div>
+    </div>
+    <!-- 联系人目录与内部群聊；当前交互使用原型数据。 -->
+    <div id="contacts-panel" class="queue-panel" hidden>
+      <div class="contacts-actions"><button id="add-contact-group" class="small-link" type="button">＋ 新建分组</button></div>
+      <div class="contact-category-tabs" aria-label="联系人类型">
+        <button class="contact-category active" type="button" data-contact-category="team">团队</button>
+        <button class="contact-category" type="button" data-contact-category="groupChats">群聊</button>
+        <button class="contact-category" type="button" data-contact-category="buyers">买家</button>
+        <button class="contact-category" type="button" data-contact-category="blacklist">黑名单</button>
+      </div>
+      <div class="contacts-store">▣ 小唛生活 <span>旗舰店 / 家居店</span></div>
+      <div id="contacts-list" class="contacts-list"></div>
+    </div>
+  </aside>
+  <main id="customer-chat-view" class="chat">
+    <div id="conversation-empty" class="conversation-empty" hidden>当前分类暂无会话</div>
+    <div class="chat-header">
+      <div>
+        <div class="chat-title" id="chat-name">
+          林女士
+          <span class="pill blue" id="chat-status">
+            接待中
+          </span>
+        </div>
+        <div class="chat-subtitle" id="chat-subtitle">
+          企业微信客服 · 小唛生活旗舰店 · 接待人 陈小雨
+        </div>
+      </div>
+      <div class="chat-actions">
+        <button class="btn" id="transfer-btn">
+          转接
+        </button>
+        <button class="btn" id="close-btn">
+          结束会话
+        </button>
+      </div>
+    </div>
+    <div class="notice">
+      <span>
+        <strong>
+          外发提醒
+        </strong>
+        当前会话处于 48 小时回复窗口，剩余
+        <b id="budget">
+          3
+        </b>
+        条外发额度；请尽量合并回复。
+      </span>
+      <span>
+        窗口至 09月24日 09:40
+      </span>
+    </div>
+    <div class="messages" id="messages">
+    </div>
+    <div id="conversation-ended-note" class="conversation-ended-note" hidden>会话已结束，仅可查看聊天记录</div>
+    <div class="composer">
+      <div class="composer-toolbar">
+        <div class="tool-group" aria-label="回复工具">
+          <div class="emoji-control">
+            <button class="tool" data-tooltip="表情" aria-label="表情" aria-expanded="false" aria-controls="emoji-picker" id="emoji-btn" type="button"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M8 14a4 4 0 0 0 8 0M8 9h.01M16 9h.01"/></svg></button>
+            <div id="emoji-picker" class="emoji-picker" aria-label="选择表情" hidden></div>
+          </div>
+          <button class="tool" data-tooltip="截图" aria-label="截图" id="screenshot-btn" type="button"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="6" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="m8 8 12 12M8 16 20 4"/></svg></button>
+          <button class="tool" data-tooltip="发送图片" aria-label="发送图片" id="image-btn" type="button"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="3"/><circle cx="8" cy="8" r="1"/><path d="m3 17 6-6 4 4 3-3 5 5"/></svg></button>
+          <button class="tool" data-tooltip="发送视频" aria-label="发送视频" id="video-btn" type="button"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="2" y="5" width="15" height="14" rx="2"/><path d="m17 10 5-3v10l-5-3z"/></svg></button>
+          <button class="tool" data-tooltip="发送文件" aria-label="发送文件" id="file-btn" type="button"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 2h9l5 5v15H5zM14 2v5h5M8 12h8M8 16h8"/></svg></button>
+          <span class="tool-divider" aria-hidden="true"></span>
+          <button class="tool" data-tooltip="快捷短语" aria-label="快捷短语" id="shortcut-btn" type="button"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 3h14a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H9l-6 3V5a2 2 0 0 1 2-2ZM7 8h10M7 12h7"/></svg></button>
+          <button class="tool" data-tooltip="商品链接" aria-label="商品链接" id="product-btn" type="button"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m10 13 4-4M8 16l-1 1a4 4 0 0 1-6-6l4-4a4 4 0 0 1 6 0M13 17a4 4 0 0 0 6 0l4-4a4 4 0 0 0-6-6l-1 1" transform="translate(0 -1) scale(.95)"/></svg></button>
+          <button class="tool" data-tooltip="邀请下单" aria-label="邀请下单" id="invite-order-btn" type="button"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M2 3h3l3 13h11l3-9H6M12 4h6m-3-3v6"/><circle cx="9" cy="21" r="1"/><circle cx="18" cy="21" r="1"/></svg></button>
+        </div>
+        <span class="pill green">
+          人工确认后发送
+        </span>
+      </div>
+      <input id="reply-image-file" type="file" accept="image/png,image/jpeg,image/webp,image/gif" hidden>
+      <input id="reply-video-file" type="file" accept="video/*" hidden>
+      <input id="reply-document-file" type="file" hidden>
+      <div id="reply-attachment" class="reply-attachment" hidden><img id="reply-attachment-image" alt="待发送图片" hidden><span id="reply-attachment-icon" class="reply-attachment-icon" aria-hidden="true" hidden></span><span id="reply-attachment-name" class="reply-attachment-name"></span><button id="remove-attachment" class="small-link" type="button">移除</button></div>
+      <div class="reply-input-wrap">
+        <div id="phrase-suggestions" class="phrase-suggestions" hidden>
+          <div id="phrase-options" class="phrase-options" role="listbox" aria-label="匹配的快捷短语"></div>
+          <div class="phrase-suggestions-foot"><span>↑ ↓ 选择 · Enter 填入 · Esc 收起</span><span id="phrase-match-count" aria-live="polite"></span></div>
+        </div>
+        <textarea id="reply" aria-label="回复内容" aria-autocomplete="list" aria-controls="phrase-options" placeholder="输入回复，或从右侧选择一条 AI 建议…"></textarea>
+      </div>
+      <div class="composer-foot">
+        <span class="hint" id="reply-hint">
+          Enter 发送 · Shift+Enter 换行
+        </span>
+        <button class="btn primary" id="send-btn">
+          发送回复 ↗
+        </button>
+      </div>
+    </div>
+  </main>
+  <!-- 内部群聊与客服外发会话分开：没有微信客服外发额度或 AI 候选。 -->
+  <main id="group-chat-view" class="chat" hidden>
+    <div class="chat-header">
+      <div>
+        <div class="chat-title" id="group-chat-title"></div>
+        <div class="chat-subtitle" id="group-chat-subtitle"></div>
+      </div>
+      <span class="pill blue">内部协作 · 演示</span>
+    </div>
+    <div class="group-chat-note">此处是团队内部群聊演示，消息不会发送到微信客服客户。</div>
+    <div class="messages" id="group-chat-messages" aria-live="polite"></div>
+    <div class="composer">
+      <div class="composer-toolbar"><strong class="group-composer-label">发送到内部群聊</strong><span class="pill green">仅本地演示</span></div>
+      <textarea id="group-chat-reply" placeholder="输入群消息…"></textarea>
+      <div class="composer-foot"><span class="hint">Enter 发送 · Shift+Enter 换行</span><button class="btn primary" id="group-chat-send" type="button">发送群消息 ↗</button></div>
+    </div>
+  </main>
+  <aside id="customer-assist" class="assist">
+    <div class="assist-header">
+      <div class="assist-view-tabs" aria-label="右侧工具">
+        <button class="active" type="button" data-assist-view="ai" aria-pressed="true">智能辅助</button>
+        <button type="button" data-assist-view="phrases" aria-pressed="false">快捷短语</button>
+      </div>
+      <span class="pill green" id="candidate-status">
+        已完成检索
+      </span>
+    </div>
+    <div id="assist-ai-panel">
+    <div class="assist-section">
+      <div class="assist-label">
+        <span id="candidate-label">
+          3 条候选回复
+        </span>
+        <span class="assist-sub">
+          选择后可继续编辑
+        </span>
+      </div>
+      <div id="candidates">
+      </div>
+      <button class="small-link" id="candidate-detail">
+        查看本次检索依据 →
+      </button>
+    </div>
+    <div class="assist-section" id="product-section">
+      <div class="assist-label">
+        关联商品
+        <span class="assist-sub">
+          当前会话已锁定
+        </span>
+      </div>
+      <div class="product-card">
+        <div class="product-image">
+          ☕
+        </div>
+        <div>
+          <div class="product-name">
+            轻享保温杯 · 500ml
+          </div>
+          <div class="product-detail">
+            黑色 / 米白色 · SKU 2 款
+          </div>
+          <div class="product-detail">
+            资料快照更新于 09月22日 08:30
+          </div>
+          <button class="small-link" style="margin-top:7px" id="insert-link">
+            插入商品链接
+          </button>
+        </div>
+      </div>
+      <div class="footnote">
+        价格与库存来自导入快照，请以商品页面为准。
+      </div>
+    </div>
+    <div class="assist-section">
+      <div class="assist-label">
+        客户信息
+        <span class="assist-sub">
+          已脱敏
+        </span>
+      </div>
+      <div class="customer-row">
+        <span>
+          渠道身份
+        </span>
+        <span>
+          微信客服用户 · wx_83****
+        </span>
+      </div>
+      <div class="customer-row">
+        <span>
+          所属店铺
+        </span>
+        <span>
+          小唛生活旗舰店
+        </span>
+      </div>
+      <div class="customer-row">
+        <span>
+          历史会话
+        </span>
+        <span>
+          2 次
+        </span>
+      </div>
+      <div class="customer-row">
+        <span>
+          最近咨询
+        </span>
+        <span>
+          颜色、保温时长
+        </span>
+      </div>
+    </div>
+    </div>
+    <div id="assist-phrase-panel" hidden>
+      <div class="assist-section phrase-aside-controls">
+        <input id="phrase-aside-search" class="search" type="search" placeholder="搜索快捷短语" aria-label="搜索快捷短语">
+        <div class="phrase-aside-toolbar">
+          <div class="phrase-scope-tabs" aria-label="短语范围">
+            <button class="active" type="button" data-phrase-aside-scope="个人" aria-pressed="true">个人</button>
+            <button type="button" data-phrase-aside-scope="团队" aria-pressed="false">团队</button>
+          </div>
+          <button class="small-link" id="phrase-aside-add" type="button">＋ 新增</button>
+        </div>
+        <button class="small-link" id="phrase-aside-manage" type="button">管理快捷短语 →</button>
+      </div>
+      <div id="phrase-aside-list" class="phrase-aside-list"></div>
+    </div>
+  </aside>
+  <aside id="group-chat-aside" class="assist" hidden>
+    <div class="assist-header"><span class="assist-title">群聊信息</span><span class="pill blue">内部群</span></div>
+    <div class="assist-section">
+      <div class="assist-label">群成员 <span id="group-chat-member-count" class="assist-sub"></span></div>
+      <div id="group-chat-members"></div>
+    </div>
+    <div class="assist-section"><p class="group-aside-note">群聊、成员和消息目前保存在本次页面会话中。正式接入时需要服务端提供群权限、消息历史与实时通知。</p></div>
+  </aside>
+</section>

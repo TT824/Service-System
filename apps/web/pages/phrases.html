@@ -1,0 +1,29 @@
+<!-- 企业员工：个人快捷短语；团队短语由企业管理员维护。 -->
+<section id="phrases" class="page">
+  <div class="page-header">
+    <div>
+      <h1>快捷短语</h1>
+      <div class="page-desc">团队短语供成员使用，个人短语仅本人可管理。选用后填入回复框，由客服确认发送。</div>
+    </div>
+    <button class="btn primary" id="add-phrase" type="button">＋ 新建个人短语</button>
+  </div>
+  <div class="panel">
+    <div class="panel-head phrase-panel-head">
+      <div class="phrase-scope-tabs" aria-label="短语范围">
+        <button class="active" type="button" data-phrase-page-scope="个人" aria-pressed="true">个人</button>
+        <button type="button" data-phrase-page-scope="团队" aria-pressed="false">团队</button>
+      </div>
+      <span id="phrase-scope-note" class="assist-sub">仅自己可见和编辑</span>
+    </div>
+    <div class="filter-row">
+      <input id="phrase-search" class="search" placeholder="搜索标题、内容或关键词" aria-label="搜索快捷短语">
+      <select id="phrase-category" class="selector" aria-label="筛选分类"><option value="">全部分类</option></select>
+    </div>
+    <div class="phrase-table-wrap">
+      <table class="table">
+        <thead><tr><th>标题</th><th>内容预览</th><th>分类</th><th>范围</th><th>状态</th><th>操作</th></tr></thead>
+        <tbody id="phrase-rows"></tbody>
+      </table>
+    </div>
+  </div>
+</section>

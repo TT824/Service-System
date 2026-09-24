@@ -1,0 +1,104 @@
+<!-- 企业知识库：所有成员可查看，管理员可维护。 -->
+<section id="knowledge" class="page knowledge-page">
+  <div class="page-header knowledge-page-header">
+    <div>
+      <h1>知识库</h1>
+      <div class="page-desc">统一查看商品、常见问题和快捷话术，供客服检索与回复使用。</div>
+    </div>
+    <div class="page-actions knowledge-page-actions">
+      <span id="knowledge-access-badge" class="knowledge-access-badge">正在确认权限…</span>
+      <button class="btn" id="knowledge-download-template" type="button">下载导入模板</button>
+      <button class="btn" id="knowledge-import" type="button">批量导入</button>
+      <button class="btn primary" id="knowledge-add" type="button">＋ 录入商品</button>
+      <input id="knowledge-file-input" type="file" accept=".xlsx,.csv" hidden>
+    </div>
+  </div>
+
+  <div id="knowledge-scope-note" class="knowledge-scope-note" role="status">正在读取公司知识库…</div>
+
+  <div class="knowledge-layout">
+    <div class="panel knowledge-list-panel">
+      <div class="panel-head knowledge-panel-head">
+        <div>
+          <span class="knowledge-eyebrow">KNOWLEDGE</span>
+          <span class="panel-title">知识库</span>
+        </div>
+        <div class="knowledge-tabs" role="tablist" aria-label="知识类型">
+          <button class="active" type="button" role="tab" data-knowledge-tab="products" aria-selected="true">商品</button>
+          <button type="button" role="tab" data-knowledge-tab="faqs" aria-selected="false">常见问题</button>
+          <button type="button" role="tab" data-knowledge-tab="shortcuts" aria-selected="false">快捷话术</button>
+        </div>
+      </div>
+      <div class="knowledge-filter-row">
+        <input id="knowledge-search" class="search" placeholder="搜索商品名称、SKU 或描述" aria-label="搜索知识库">
+        <select id="knowledge-status-filter" class="selector" aria-label="筛选状态">
+          <option value="all">全部状态</option>
+          <option value="enabled">已启用</option>
+          <option value="disabled">已停用</option>
+        </select>
+        <span id="knowledge-count" class="knowledge-count">0 条</span>
+      </div>
+      <div id="knowledge-list" class="knowledge-list" aria-live="polite">
+        <div class="empty">正在加载知识库…</div>
+      </div>
+    </div>
+
+    <aside class="panel knowledge-maintain-panel" aria-label="知识详情">
+      <div class="panel-head knowledge-maintain-head">
+        <div>
+          <span class="knowledge-eyebrow">MAINTAIN</span>
+          <span id="knowledge-form-title" class="panel-title">录入商品</span>
+        </div>
+        <button id="knowledge-form-reset" class="small-link" type="button">清空</button>
+      </div>
+      <form id="knowledge-form" class="knowledge-form">
+        <div id="knowledge-product-fields" class="knowledge-form-fields">
+          <label for="knowledge-product-sku">SKU</label>
+          <input id="knowledge-product-sku" class="field" maxlength="100" placeholder="用于会话检索的商品编码">
+          <label for="knowledge-product-title">标题</label>
+          <input id="knowledge-product-title" class="field" maxlength="160" placeholder="商品标题">
+          <label for="knowledge-product-description">描述</label>
+          <textarea id="knowledge-product-description" class="field" maxlength="4000" placeholder="规格、材质、颜色、库存与售后说明"></textarea>
+        </div>
+
+        <div id="knowledge-faq-fields" class="knowledge-form-fields" hidden>
+          <label for="knowledge-faq-question">问题</label>
+          <input id="knowledge-faq-question" class="field" maxlength="300" placeholder="标准问题">
+          <label for="knowledge-faq-answer">答案</label>
+          <textarea id="knowledge-faq-answer" class="field" maxlength="4000" placeholder="客服可以直接参考的标准答案"></textarea>
+          <label for="knowledge-faq-tags">标签</label>
+          <input id="knowledge-faq-tags" class="field" maxlength="300" placeholder="多个标签用逗号分隔">
+        </div>
+
+        <div id="knowledge-shortcut-fields" class="knowledge-form-fields" hidden>
+          <label for="knowledge-shortcut-code">代码</label>
+          <input id="knowledge-shortcut-code" class="field" maxlength="100" placeholder="例如 refund_policy">
+          <label for="knowledge-shortcut-title">标题</label>
+          <input id="knowledge-shortcut-title" class="field" maxlength="160" placeholder="话术标题">
+          <label for="knowledge-shortcut-content">话术内容</label>
+          <textarea id="knowledge-shortcut-content" class="field" maxlength="4000" placeholder="客服选用后可再次编辑"></textarea>
+        </div>
+
+        <p id="knowledge-form-help" class="knowledge-form-help">选择左侧条目可查看详情，管理员可以编辑并保存。</p>
+        <p id="knowledge-form-error" class="knowledge-form-error" role="alert"></p>
+        <div class="knowledge-form-actions">
+          <button class="btn primary" id="knowledge-save" type="submit">保存</button>
+        </div>
+      </form>
+    </aside>
+  </div>
+
+  <div class="panel knowledge-test-panel">
+    <div class="panel-head">
+      <div>
+        <span class="panel-title">回答测试</span>
+        <span class="knowledge-panel-subtitle">按当前可见知识快速检查匹配结果</span>
+      </div>
+    </div>
+    <div class="panel-body knowledge-test-body">
+      <input id="knowledge-test-question" class="field" placeholder="输入客户可能提出的问题，例如：有黑色的保温杯吗？">
+      <button class="btn primary" id="knowledge-test" type="button">测试检索</button>
+    </div>
+    <div id="knowledge-test-result" class="knowledge-test-result" aria-live="polite"></div>
+  </div>
+</section>

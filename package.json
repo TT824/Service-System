@@ -1,0 +1,52 @@
+{
+  "name": "kefu-saas",
+  "version": "0.1.0",
+  "private": true,
+  "description": "智能客服 SaaS 平台 - 模块化 monorepo（工程骨架、环境与质量基线）",
+  "engines": {
+    "node": ">=20"
+  },
+  "workspaces": [
+    "apps/*",
+    "packages/*",
+    "database",
+    "tests"
+  ],
+  "scripts": {
+    "build:packages": "npm run build --workspace @kefu/core && npm run build --workspace @kefu/wecom",
+    "build": "npm run build:packages && npm run build --workspaces --if-present",
+    "clean": "npm run clean --workspaces --if-present",
+    "typecheck": "npm run build:packages && npm run typecheck --workspaces --if-present",
+    "lint": "eslint .",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "test": "npm run build:packages && vitest run",
+    "test:unit": "npm run build:packages && vitest run --config vitest.unit.config.ts",
+    "test:interface": "npm run build:packages && vitest run --config vitest.interface.config.ts",
+    "eval:retrieval": "npm run build:packages && vitest run --config vitest.eval.config.ts",
+    "eval:typecheck": "tsc --noEmit -p eval/tsconfig.json",
+    "dev:api": "npm run dev --workspace @kefu/api",
+    "dev:worker": "npm run dev --workspace @kefu/worker",
+    "dev:web": "npm run dev --workspace @kefu/web",
+    "db:migrate": "npm run migrate --workspace @kefu/database",
+    "db:rollback": "npm run rollback --workspace @kefu/database",
+    "db:status": "npm run status --workspace @kefu/database",
+    "db:check": "npm run check --workspace @kefu/database",
+    "db:seed": "npm run seed --workspace @kefu/database",
+    "db:prune": "npm run prune --workspace @kefu/database",
+    "compose:check": "node scripts/check-compose.cjs",
+    "db:create-account": "npm run create-account --workspace @kefu/database"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.39.5",
+    "@testing-library/react": "^16.3.3",
+    "@types/node": "^22.7.5",
+    "eslint": "^9.39.5",
+    "jsdom": "^29.1.1",
+    "prettier": "^3.9.6",
+    "typescript": "~5.6.3",
+    "typescript-eslint": "^8.14.0",
+    "vitest": "^3.2.7",
+    "yaml": "^2.5.0"
+  }
+}

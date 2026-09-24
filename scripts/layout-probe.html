@@ -1,0 +1,195 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <title>layout probe</title>
+    <!--
+      真实的样式表，真实的类名。这个文件只是给眼睛看的脚手架：它复现工作台的 DOM
+      结构，不是控制台本身 —— 仓库里没有浏览器驱动，jsdom 又不算布局，这是唯一能
+      **看见**版面的办法（工作台那两次「中间一大块空白」「看不见发送键」都是这么
+      找到的：Grid 自动放置因列号倒退把内容推到第 2 行，第 1 行第 1 列整块空着）。
+
+      用法（Edge 是 Windows 自带的）：
+        "/c/Program Files (x86)/Microsoft/Edge/Application/msedge.exe" \
+          --headless=new --disable-gpu --hide-scrollbars --window-size=1440,900 \
+          --user-data-dir="$TEMP/edge-probe" --screenshot=probe.png \
+          "file:///<本文件绝对路径>"
+      然后直接打开 probe.png 看。
+
+      局限：这是手搭的 DOM，会和 `WorkspaceView.tsx` 的真实结构漂移。
+      结构本身由 `workspace-view.spec.tsx` 的「the detail panel's two columns」
+      钉着，两边对不上时以那个测试为准，回来改这里。
+    -->
+    <link rel="stylesheet" href="../apps/web/src/styles.css" />
+    <style>
+      body {
+        margin: 0;
+        background: var(--bg);
+        font-family: var(--font-ui);
+        color: var(--text);
+      }
+      .probe-pad {
+        padding: 16px;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="probe-pad">
+      <div class="workspace">
+        <div class="workspace-list">
+          <section class="panel">
+            <header class="panel-head">
+              <div class="panel-heading-copy">
+                <p class="panel-kicker">PRESENCE</p>
+                <h2 class="panel-title">接待状态</h2>
+              </div>
+              <div class="panel-actions"><span class="tag">在线接单</span></div>
+            </header>
+            <div class="panel-body">
+              <div class="form-actions presence-actions">
+                <button class="btn">在线接单</button>
+                <button class="btn">忙碌</button>
+                <button class="btn">离开</button>
+                <button class="btn">离线</button>
+              </div>
+            </div>
+          </section>
+          <section class="panel">
+            <header class="panel-head">
+              <div class="panel-heading-copy">
+                <p class="panel-kicker">QUEUE</p>
+                <h2 class="panel-title">会话队列</h2>
+              </div>
+              <div class="panel-actions"><button class="btn">刷新</button></div>
+            </header>
+            <div class="panel-body">
+              <ul class="conv-list">
+                <li>
+                  <button class="conv-row is-active">
+                    <span class="conv-row-main">
+                      <span class="dot"></span>
+                      <span class="conv-title">网页顾客-验收</span>
+                    </span>
+                    <span class="conv-row-meta">
+                      <span class="tag">接待中</span>
+                      <span class="muted">旗舰店</span>
+                      <span class="muted">17:02</span>
+                    </span>
+                  </button>
+                </li>
+              </ul>
+            </div>
+          </section>
+        </div>
+
+        <div class="workspace-detail">
+          <section class="panel">
+            <header class="panel-head">
+              <div class="panel-heading-copy">
+                <p class="panel-kicker">CONVERSATION</p>
+                <h2 class="panel-title">网页顾客-验收</h2>
+              </div>
+              <div class="panel-actions"><span class="muted mono">v7</span></div>
+            </header>
+            <div class="panel-body">
+              <div class="detail-aside">
+                <dl class="kv-row">
+                  <div>
+                    <dt>会话 ID</dt>
+                    <dd class="mono">conv-9ff2</dd>
+                  </div>
+                  <div>
+                    <dt>门店</dt>
+                    <dd>旗舰店</dd>
+                  </div>
+                  <div>
+                    <dt>租户</dt>
+                    <dd>Acme 商贸</dd>
+                  </div>
+                  <div>
+                    <dt>接待坐席</dt>
+                    <dd>坐席一号</dd>
+                  </div>
+                </dl>
+                <div class="conv-actions">
+                  <button class="btn">释放回池</button>
+                  <button class="btn btn-danger">结束会话</button>
+                </div>
+              </div>
+
+              <div class="detail-main">
+                <h3 class="section-label">消息时间线</h3>
+                <div class="transcript">
+                  <div class="message message-in">
+                    <div class="bubble">请问这件羽绒服有加大码吗</div>
+                  </div>
+                  <div class="message message-out">
+                    <div class="bubble">有的，加大码还有一件，今天下单明天发。</div>
+                  </div>
+                  <div class="message message-out">
+                    <div class="bubble">您好，当前暂无客服在线，您的消息我们已经收到。</div>
+                  </div>
+                  <div class="message message-in">
+                    <div class="bubble">好的，那我今天下单</div>
+                  </div>
+                </div>
+
+                <section class="suggest">
+                  <div class="suggest-head">
+                    <h3 class="section-label">智能回复</h3>
+                    <input class="input suggest-intent" value="" placeholder="补充一句想说什么…" />
+                    <button class="btn">换一批</button>
+                  </div>
+                  <ul class="suggest-cards">
+                    <li>
+                      <button class="suggest-card">
+                        <span class="suggest-card-head"
+                          ><span class="suggest-card-rank">1</span></span
+                        >
+                        <span class="suggest-card-title">黑色 XL 加绒卫衣</span>
+                        <span class="suggest-card-content"
+                          >黑色 XL 加绒卫衣现货充足，今天下单明天即可发出。</span
+                        >
+                      </button>
+                    </li>
+                    <li>
+                      <button class="suggest-card">
+                        <span class="suggest-card-head"
+                          ><span class="suggest-card-rank">2</span></span
+                        >
+                        <span class="suggest-card-title">发货时效说明</span>
+                        <span class="suggest-card-content"
+                          >我们默认 48 小时内发出，节假日顺延。</span
+                        >
+                      </button>
+                    </li>
+                    <li>
+                      <button class="suggest-card">
+                        <span class="suggest-card-head"
+                          ><span class="suggest-card-rank">3</span></span
+                        >
+                        <span class="suggest-card-title">运费怎么算</span>
+                        <span class="suggest-card-content">单笔满 99 元包邮，偏远地区除外。</span>
+                      </button>
+                    </li>
+                  </ul>
+                </section>
+
+                <div class="composer">
+                  <div class="composer-head">
+                    <h3 class="section-label">外发消息</h3>
+                    <span class="field-hint">直接输入将按「手动输入」记录</span>
+                  </div>
+                  <textarea class="textarea" rows="3" placeholder="输入回复内容…"></textarea>
+                  <div class="composer-actions">
+                    <button class="btn btn-primary">手动发送</button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </section>
+        </div>
+      </div>
+    </div>
+  </body>
+</html>

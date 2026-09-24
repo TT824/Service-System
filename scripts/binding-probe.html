@@ -1,0 +1,129 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <title>binding panel probe</title>
+    <!--
+      真实的样式表，真实的类名。和 `layout-probe.html` 一样，这只是给眼睛看的脚手架：
+      它复现 `WecomBindingPanel.tsx` 渲染出的结构，不是那个组件本身。仓库里没有浏览器
+      驱动，jsdom 不算布局，这是唯一能**看见**新面板版面的办法。
+
+      要看的只有一件事：`.binding-row` 用了 4 列网格（图标 / 账号 / 门店 / 状态），
+      而账号那一串可以很长。桌面宽度下它必须自己换行而不是把门店和状态挤出格子；
+      窄屏下必须落回 `.sub-row` 的两列坍缩。两者都只能看出来，推不出来。
+
+      用法：
+        "/c/Program Files (x86)/Microsoft/Edge/Application/msedge.exe" \
+          --headless=new --disable-gpu --hide-scrollbars --window-size=1440,900 \
+          --user-data-dir="$TEMP/edge-probe" --screenshot=probe-bindings.png \
+          "file:///<本文件绝对路径>"
+      再把 --window-size 换成 420,900 看窄屏。
+
+      量宽度：给 URL 加 `?measure`。脚本量完就把 body 换成一行 <pre>，所以
+        msedge --headless=new --dump-dom --virtual-time-budget=2000 "file:///...?measure"
+      打出来只有几个数字，不用把整份 DOM 灌进上下文。看不出「页面为什么比视口宽」
+      的时候跑这个，别猜。
+
+      局限：手搭的 DOM 会和组件漂移。结构本身由 `channels-view.spec.tsx`
+      的「the binding panel」钉着，两边对不上时以那个测试为准，回来改这里。
+    -->
+    <link rel="stylesheet" href="../apps/web/src/styles.css" />
+  </head>
+  <body>
+    <div style="padding: 16px">
+      <section class="panel">
+        <header class="panel-head">
+          <div class="panel-heading-copy">
+            <p class="panel-kicker">BINDINGS</p>
+            <h2 class="panel-title">企业微信账号绑定</h2>
+          </div>
+          <div class="panel-actions">
+            <span class="tag" data-tone="info"><span class="tag-dot"></span>3 条</span>
+          </div>
+        </header>
+        <div class="panel-body">
+          <p class="lede">
+            这里登记的是一条「哪个客服账号的消息写进哪个门店」的记录：企业微信推来一条回调时，平台用它决定会话落到哪个组织、哪个门店，也决定回复从哪个门店发出。
+          </p>
+          <ul class="sub-list binding-list">
+            <li class="sub-row binding-row">
+              <span class="binding-mark">◎</span>
+              <span class="sub-name mono"
+                >ww-acme-enterprise-id / wk-account-with-a-fairly-long-identifier</span
+              >
+              <span class="muted">Acme 旗舰店<small class="binding-scope">tenant-acme</small></span>
+              <span class="tag" data-tone="ok"><span class="tag-dot"></span>已生效</span>
+            </li>
+            <li class="sub-row binding-row">
+              <span class="binding-mark">◎</span>
+              <span class="sub-name mono">ww-acme / wk-second</span>
+              <span class="muted"
+                >store-not-in-directory<small class="binding-scope">tenant-acme</small></span
+              >
+              <span class="tag" data-tone="neutral"><span class="tag-dot"></span>已停用</span>
+            </li>
+            <li class="sub-row binding-row">
+              <span class="binding-mark">◎</span>
+              <span class="sub-name mono">ww-beta / wk-beta-account</span>
+              <span class="muted">Beta 官方店<small class="binding-scope">tenant-beta</small></span>
+              <span class="tag" data-tone="ok"><span class="tag-dot"></span>已生效</span>
+            </li>
+          </ul>
+
+          <form class="form-stack binding-form">
+            <h3 class="section-label">登记新账号</h3>
+            <div class="form-grid">
+              <label class="field">
+                <span class="field-label">写入门店</span>
+                <select class="select">
+                  <option>Acme 旗舰店</option>
+                </select>
+                <span class="field-hint">回调写进这个门店的会话与队列。</span>
+              </label>
+              <label class="field">
+                <span class="field-label">企业 ID（corp_id）</span>
+                <input class="input mono" value="ww-acme" />
+                <span class="field-hint"
+                  >企业微信管理后台「我的企业」里的企业 ID，形如 ww 开头的一串字符。</span
+                >
+              </label>
+              <label class="field">
+                <span class="field-label">客服账号（open_kfid）</span>
+                <input class="input mono" value="wk-taken" />
+                <span class="field-hint"
+                  >「微信客服」里某一条客服账号的 ID，形如 wk
+                  开头；同一条账号只能有一条生效绑定。</span
+                >
+              </label>
+            </div>
+            <p class="field-hint binding-conflict">
+              ww-acme / wk-taken
+              已有一条生效绑定：一个客服账号同时只能有一条。平台暂不提供改绑入口，需要换门店时请先停用原绑定，再新增一条。
+            </p>
+            <div class="form-actions">
+              <button class="btn btn-primary" type="button">新增绑定</button>
+            </div>
+          </form>
+        </div>
+      </section>
+    </div>
+    <script>
+      // `?measure`: report what is wider than the viewport, then throw the DOM
+      // away so `--dump-dom` prints numbers instead of markup.
+      if (location.search.includes('measure')) {
+        const vw = document.documentElement.clientWidth;
+        const name = (el) =>
+          `${el.tagName.toLowerCase()}${typeof el.className === 'string' && el.className ? '.' + el.className.split(/\s+/).join('.') : ''}`;
+        const over = [...document.querySelectorAll('body *')]
+          .map((el) => ({ el, rect: el.getBoundingClientRect() }))
+          .filter(({ rect }) => rect.right > vw + 0.5)
+          .slice(0, 14)
+          .map(
+            ({ el, rect }) =>
+              `${name(el)} right=${Math.round(rect.right)} w=${Math.round(rect.width)}`,
+          );
+        document.body.innerHTML = `<pre id="measure">vw=${vw} docScroll=${document.documentElement.scrollWidth} bodyScroll=${document.body.scrollWidth}\n${over.join('\n')}</pre>`;
+      }
+    </script>
+  </body>
+</html>

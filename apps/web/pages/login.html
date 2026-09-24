@@ -1,0 +1,49 @@
+<!-- 所有用户：注册与登录界面 -->
+<section id="login" class="page">
+  <div class="page-header">
+    <div>
+      <h1>
+        账号登录
+      </h1>
+      <div class="page-desc">
+        注册后先进入账号中心，待管理员配置租户、店铺与角色后再进入工作台。
+      </div>
+    </div>
+    <button class="btn" id="back-account">
+      返回账号中心
+    </button>
+  </div>
+  <div class="panel" style="max-width:460px;margin:40px auto">
+    <div class="tabs">
+      <button class="tab active" data-auth="password">
+        账号登录
+      </button>
+      <button class="tab" data-auth="sms">
+        验证码登录
+      </button>
+      <button class="tab" data-auth="register">
+        注册账号
+      </button>
+    </div>
+    <div class="panel-body">
+      <div style="font-weight:800;font-size:18px;margin-bottom:15px" id="auth-title">
+        欢迎回来
+      </div>
+      <input class="field" id="auth-username" placeholder="账号" autocomplete="username" value="agent01">
+      <input class="field" id="auth-secret" type="password" placeholder="密码" style="margin-top:10px">
+      <button class="btn primary" id="auth-submit" style="width:100%;margin-top:17px;padding:10px">
+        登录
+      </button>
+      <p class="auth-status" id="auth-status" role="status">正在检查后端连接…</p>
+      <p class="footnote">本地坐席演示账号：agent01 / Agent123456</p>
+      <div style="display:flex;justify-content:space-between;margin-top:12px">
+        <button class="small-link" data-demo="找回密码">
+          忘记密码？
+        </button>
+        <button class="small-link" data-demo="SSO 登录">
+          SSO 登录
+        </button>
+      </div>
+    </div>
+  </div>
+</section>

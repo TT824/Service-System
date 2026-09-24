@@ -1,0 +1,158 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>
+      小唛客服 · 电商智能客服界面原型
+    </title>
+    <link rel="stylesheet" href="styles.css">
+  </head>
+  <body>
+    <div class="app">
+      <aside class="rail" aria-label="主导航">
+        <div class="logo" title="小唛客服">
+          唛
+        </div>
+        <button class="nav-item active" data-view="workspace">
+          <span class="nav-icon">
+            ▦
+          </span>
+          工作台
+        </button>
+        <button class="nav-item" data-view="products">
+          <span class="nav-icon">
+            ▤
+          </span>
+          商品库
+        </button>
+        <button class="nav-item" data-view="knowledge">
+          <span class="nav-icon">
+            ◇
+          </span>
+          知识库
+        </button>
+        <button class="nav-item" data-view="phrases">
+          <span class="nav-icon">
+            ☷
+          </span>
+          快捷短语
+        </button>
+        <button class="nav-item" data-view="analytics">
+          <span class="nav-icon">
+            ▥
+          </span>
+          数据
+        </button>
+        <button class="nav-item" data-view="admin" aria-label="管理员中心">
+          <span class="nav-icon">▣</span>
+          管理员
+        </button>
+        <button class="nav-item" data-view="settings">
+          <span class="nav-icon">
+            ⚙
+          </span>
+          设置
+        </button>
+        <button class="nav-item" data-view="review" data-minrole="platform">
+          <span class="nav-icon">
+            ✓
+          </span>
+          话术审核
+        </button>
+        <button class="nav-item" data-view="tenants" data-minrole="super">
+          <span class="nav-icon">
+            ▣
+          </span>
+          租户
+        </button>
+        <div class="rail-bottom">
+          <button class="avatar profile-btn" title="账号操作" id="profile-btn" type="button" aria-haspopup="dialog" aria-controls="profile-menu" aria-expanded="false" aria-label="打开账号操作">
+            <span id="profile-rail-initial">陈</span><img id="profile-rail-image" alt="" hidden>
+          </button>
+          <input id="profile-avatar-file" type="file" accept="image/png,image/jpeg,image/webp" hidden>
+          <div id="profile-menu" class="profile-menu" role="dialog" aria-label="账号操作" hidden>
+            <div class="profile-menu-top">
+              <button id="profile-change-avatar" class="profile-menu-avatar" type="button" title="点击更换头像" aria-label="更换头像"><span id="profile-menu-initial">陈</span><img id="profile-menu-image" alt="" hidden></button>
+              <div class="profile-menu-identity"><strong id="profile-display-name">陈小雨</strong><small id="profile-display-role">商家管理员</small></div>
+            </div>
+            <button id="profile-avatar-action" class="profile-menu-avatar-hint" type="button">点击头像更换</button>
+            <div class="profile-menu-phone"><span>手机号</span><strong id="profile-display-phone">138****2068</strong></div>
+            <button id="profile-edit-info" class="profile-menu-action" type="button"><span aria-hidden="true">✎</span>修改个人信息</button>
+            <button id="profile-change-password" class="profile-menu-action" type="button"><span aria-hidden="true">⚿</span>修改密码</button>
+            <button id="profile-sign-out" class="profile-menu-action" type="button"><span aria-hidden="true">↪</span>退出登录</button>
+          </div>
+        </div>
+      </aside>
+      <div class="main-shell">
+        <header class="topbar">
+          <div class="top-left">
+            <div class="brandline">
+              小唛客服
+              <span style="font-size:10px;color:#9aabc3;font-weight:500">
+                前后端整合预览
+              </span>
+            </div>
+            <div class="divider">
+            </div>
+            <select id="store-select" class="selector">
+              <option>
+                小唛生活 · 旗舰店
+              </option>
+              <option>
+                小唛生活 · 家居店
+              </option>
+            </select>
+          </div>
+          <div class="top-right">
+            <span class="clock" id="backend-status">
+              正在连接业务后端…
+            </span>
+            <div class="divider">
+            </div>
+            <span class="role-label">
+              当前角色
+            </span>
+            <select id="role-select" class="role-select">
+              <option value="merchant">
+                管理员
+              </option>
+              <option value="agent">
+                客服
+              </option>
+              <option value="platform">
+                平台运营
+              </option>
+              <option value="super">
+                平台超级管理员
+              </option>
+            </select>
+          </div>
+        </header>
+        <!-- 页面片段由 src/load-pages.js 按顺序加载，页面 ID 保持不变。 -->
+        <div id="page-root"></div>
+      </div>
+    </div>
+    <div class="toast" id="toast">
+    </div>
+    <div class="modal-bg" id="modal-bg">
+      <div class="modal">
+        <h2 id="modal-title">
+        </h2>
+        <p id="modal-text">
+        </p>
+        <div id="modal-extra">
+        </div>
+        <div class="modal-actions">
+          <button class="btn" id="modal-cancel">
+            取消
+          </button>
+          <button class="btn primary" id="modal-confirm">
+            确认
+          </button>
+        </div>
+      </div>
+    </div>
+    <script src="src/load-pages.js"></script>
+  </body>
+</html>

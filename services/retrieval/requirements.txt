@@ -1,0 +1,21 @@
+# The retrieval sidecar's dependencies.
+#
+# Installed in two commands, because torch comes from PyTorch's own CPU index
+# and everything else from PyPI:
+#
+#   python -m venv .venv
+#   ./.venv/Scripts/python.exe -m pip install torch --index-url https://download.pytorch.org/whl/cpu
+#   ./.venv/Scripts/python.exe -m pip install -r requirements.txt
+#
+# This file is the second command's list, and it is also the record of what the
+# service needs — the first command is separate only because `--index-url`
+# replaces PyPI rather than adding to it, so torch cannot share a command with
+# anything else.
+#
+# **The model is not listed here.** It is a downloaded artifact, not a Python
+# dependency; `scripts/fetch-model.py` is what fetches it, and it says where
+# from and why (`hf-mirror.com`).
+
+transformers>=4.44
+fastapi>=0.115
+uvicorn[standard]>=0.32

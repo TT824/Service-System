@@ -1,0 +1,15 @@
+{
+  "name": "@kefu/tests",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Cross-package example and interface tests for the kefu-saas monorepo (run by the root vitest configs).",
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "clean": "node -e \"require('node:fs').rmSync('dist',{recursive:true,force:true})\""
+  },
+  "devDependencies": {
+    "@kefu/core": "0.1.0",
+    "typescript": "~5.6.3",
+    "vitest": "^3.2.7"
+  }
+}

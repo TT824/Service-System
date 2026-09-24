@@ -1,0 +1,7 @@
+# The virtualenv, the downloaded weights, and the logs the two setup commands
+# write. All three are artifacts of running this service rather than parts of it:
+# `README.md` is the four commands that rebuild every one of them.
+.venv/
+models/
+*.log
+__pycache__/

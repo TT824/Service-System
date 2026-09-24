@@ -1,0 +1,289 @@
+{
+  "ranAt": "2026-09-21T02:05:48.244Z",
+  "tenantId": "tenant-acme",
+  "storeId": "store-acme-flagship",
+  "seed": 20260920,
+  "frozen": {
+    "validationSha256": "82168680bf8f5513a8b4b6d474274e326cae3e6a041ebc00c794da798a684cf6",
+    "validationCount": 214,
+    "devSha256": "7a18deb75013f31a2c41623d3ba4942c163c850eca25309734e08f5d3d8b7ee6",
+    "devCount": 120
+  },
+  "index": {
+    "chunks": 18147,
+    "embedded": 18147
+  },
+  "reranker": {
+    "configured": true,
+    "model": "bge-reranker-base",
+    "candidateBound": 20,
+    "maxCandidatesSeen": 20,
+    "failedQueries": 0,
+    "failureCodes": [],
+    "reorderedQueries": 0
+  },
+  "aggregate": {
+    "fused": {
+      "validation": {
+        "n": 1,
+        "hit1": 0,
+        "hit3": 0,
+        "hit5": 0,
+        "precision5": 0,
+        "sameFamily": 0,
+        "contaminated": 0,
+        "recalled": 1
+      },
+      "validationNarrow": {
+        "n": 1,
+        "hit1": 0,
+        "hit3": 0,
+        "hit5": 0,
+        "precision5": 0,
+        "sameFamily": 0,
+        "contaminated": 0,
+        "recalled": 1
+      },
+      "validationBroad": {
+        "n": 0,
+        "hit1": 0,
+        "hit3": 0,
+        "hit5": 0,
+        "precision5": 0,
+        "sameFamily": 0,
+        "contaminated": 0,
+        "recalled": 0
+      },
+      "byType": {
+        "family": {
+          "n": 1,
+          "hit1": 0,
+          "hit3": 0,
+          "hit5": 0,
+          "precision5": 0,
+          "sameFamily": 0,
+          "contaminated": 0,
+          "recalled": 1
+        }
+      }
+    },
+    "reranked": {
+      "validation": {
+        "n": 1,
+        "hit1": 0,
+        "hit3": 0,
+        "hit5": 0,
+        "precision5": 0,
+        "sameFamily": 0,
+        "contaminated": 0,
+        "recalled": 1
+      },
+      "validationNarrow": {
+        "n": 1,
+        "hit1": 0,
+        "hit3": 0,
+        "hit5": 0,
+        "precision5": 0,
+        "sameFamily": 0,
+        "contaminated": 0,
+        "recalled": 1
+      },
+      "validationBroad": {
+        "n": 0,
+        "hit1": 0,
+        "hit3": 0,
+        "hit5": 0,
+        "precision5": 0,
+        "sameFamily": 0,
+        "contaminated": 0,
+        "recalled": 0
+      },
+      "byType": {
+        "family": {
+          "n": 1,
+          "hit1": 0,
+          "hit3": 0,
+          "hit5": 0,
+          "precision5": 0,
+          "sameFamily": 0,
+          "contaminated": 0,
+          "recalled": 1
+        }
+      }
+    }
+  },
+  "aggregateDev": {
+    "fused": {
+      "validation": {
+        "n": 1,
+        "hit1": 0,
+        "hit3": 0,
+        "hit5": 0,
+        "precision5": 0,
+        "sameFamily": 0,
+        "contaminated": 0,
+        "recalled": 1
+      },
+      "validationNarrow": {
+        "n": 1,
+        "hit1": 0,
+        "hit3": 0,
+        "hit5": 0,
+        "precision5": 0,
+        "sameFamily": 0,
+        "contaminated": 0,
+        "recalled": 1
+      },
+      "validationBroad": {
+        "n": 0,
+        "hit1": 0,
+        "hit3": 0,
+        "hit5": 0,
+        "precision5": 0,
+        "sameFamily": 0,
+        "contaminated": 0,
+        "recalled": 0
+      },
+      "byType": {
+        "family": {
+          "n": 1,
+          "hit1": 0,
+          "hit3": 0,
+          "hit5": 0,
+          "precision5": 0,
+          "sameFamily": 0,
+          "contaminated": 0,
+          "recalled": 1
+        }
+      }
+    },
+    "reranked": {
+      "validation": {
+        "n": 1,
+        "hit1": 0,
+        "hit3": 0,
+        "hit5": 0,
+        "precision5": 0,
+        "sameFamily": 0,
+        "contaminated": 0,
+        "recalled": 1
+      },
+      "validationNarrow": {
+        "n": 1,
+        "hit1": 0,
+        "hit3": 0,
+        "hit5": 0,
+        "precision5": 0,
+        "sameFamily": 0,
+        "contaminated": 0,
+        "recalled": 1
+      },
+      "validationBroad": {
+        "n": 0,
+        "hit1": 0,
+        "hit3": 0,
+        "hit5": 0,
+        "precision5": 0,
+        "sameFamily": 0,
+        "contaminated": 0,
+        "recalled": 0
+      },
+      "byType": {
+        "family": {
+          "n": 1,
+          "hit1": 0,
+          "hit3": 0,
+          "hit5": 0,
+          "precision5": 0,
+          "sameFamily": 0,
+          "contaminated": 0,
+          "recalled": 1
+        }
+      }
+    }
+  },
+  "controls": {
+    "count": 0,
+    "keywordLegRecall": 0
+  },
+  "negation": {
+    "count": 0,
+    "fusedContaminated": 0,
+    "rerankedContaminated": 0
+  },
+  "verdicts": {
+    "融合排序：召回有、前五没有": 1
+  },
+  "outcomes": [
+    {
+      "id": "family-059",
+      "type": "family",
+      "band": "narrow",
+      "query": "四叶草保温杯",
+      "targetCount": 6,
+      "keywordSpus": 5,
+      "semanticSpus": 4,
+      "semanticUnavailable": null,
+      "legRecallKeyword": true,
+      "legRecallSemantic": true,
+      "candidateCount": 20,
+      "arms": {
+        "fused": {
+          "spus": [],
+          "hit1": false,
+          "hit3": false,
+          "hit5": false,
+          "precision5": 0,
+          "sameFamilyOtherValue": 0,
+          "contaminated": 0
+        },
+        "reranked": {
+          "spus": [],
+          "hit1": false,
+          "hit3": false,
+          "hit5": false,
+          "precision5": 0,
+          "sameFamilyOtherValue": 0,
+          "contaminated": 0
+        }
+      },
+      "rerankUnavailable": null,
+      "verdict": "融合排序：召回有、前五没有"
+    },
+    {
+      "id": "family-061",
+      "type": "family",
+      "band": "narrow",
+      "query": "棵柚分段压力袜",
+      "targetCount": 2,
+      "keywordSpus": 2,
+      "semanticSpus": 9,
+      "semanticUnavailable": null,
+      "legRecallKeyword": true,
+      "legRecallSemantic": true,
+      "candidateCount": 20,
+      "arms": {
+        "fused": {
+          "spus": [],
+          "hit1": false,
+          "hit3": false,
+          "hit5": false,
+          "precision5": 0,
+          "sameFamilyOtherValue": 0,
+          "contaminated": 0
+        },
+        "reranked": {
+          "spus": [],
+          "hit1": false,
+          "hit3": false,
+          "hit5": false,
+          "precision5": 0,
+          "sameFamilyOtherValue": 0,
+          "contaminated": 0
+        }
+      },
+      "rerankUnavailable": null,
+      "verdict": "融合排序：召回有、前五没有"
+    }
+  ]
+}
