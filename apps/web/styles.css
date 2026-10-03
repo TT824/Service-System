@@ -468,3 +468,16 @@
     @media (max-width:1280px) { .workspace { grid-template-columns:250px minmax(330px,1fr) 320px; } .topbar { padding:0 16px; } .clock { display:none; } .overview-metric { flex-basis:103px; } }
     @media (max-width:1080px) { .workspace { grid-template-columns:240px minmax(0,1fr); } .assist { display:none; } .stat-grid { grid-template-columns:repeat(2,minmax(0,1fr)); } .overview-details { padding-left:12px; flex-wrap:wrap; } .overview-details p { margin-left:0; } }
     @media (max-width:720px) { .app { grid-template-columns:54px 1fr; } .rail { padding:10px 2px; } .logo { width:36px; height:36px; margin-bottom:12px; } .nav-item { width:47px; font-size:9px; } .topbar { height:62px; } .top-right .role-label,.top-right .divider { display:none; } .brandline { font-size:14px; } .workspace { height:calc(100vh - 62px); grid-template-columns:1fr; } .workspace-overview { padding:10px 12px; gap:7px; } .agent-summary { min-width:0; } .overview-metrics { order:3; flex-basis:100%; } .overview-metric { min-width:102px; } .overview-details { order:4; } .overview-toggle { margin-left:auto; } .queue { display:none; } .chat-header { padding:10px; } .messages { padding:18px 12px; } .page { height:calc(100vh - 62px); padding:20px 15px; } .two-col { grid-template-columns:1fr; } .top-left .selector { max-width:130px; } .knowledge-page-header { flex-direction:column; } .knowledge-page-actions { justify-content:flex-start; } .knowledge-panel-head { align-items:flex-start; flex-direction:column; gap:9px; } .knowledge-tabs { width:100%; } .knowledge-tabs button { flex:1; } .knowledge-filter-row,.knowledge-test-body { align-items:stretch; flex-direction:column; } .knowledge-filter-row .selector { width:100%; } .knowledge-count { margin-left:0; } }
+
+/* 数据导出沿用白色面板和表格，小屏筛选字段自动换行。 */
+.export-panel { margin-bottom: 18px; }
+.export-form { padding: 20px; display: grid; gap: 16px; }
+.export-form label { display: grid; gap: 8px; font-size: 13px; }
+.export-filter-fields { display: grid; grid-template-columns: 2fr 1fr 1fr; gap: 16px; }
+.export-filter-fields[hidden] { display: none; }
+.export-table { overflow-x: auto; }
+.export-table .table { min-width: 800px; }
+.export-job-id { display: block; color: var(--muted); margin-top: 6px; }
+.export-notice { min-height: 24px; color: #18836c; }
+.export-notice.error { color: #c43b3b; }
+@media (max-width: 800px) { .export-filter-fields { grid-template-columns: 1fr; } }

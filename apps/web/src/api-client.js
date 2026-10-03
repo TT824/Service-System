@@ -99,6 +99,20 @@
     logout,
     currentSession: () => request('/auth/session'),
     directoryTenants: () => request('/directory/tenants'),
+    exportJobs: tenantId => request('/exports', { tenantId }),
+    createExport: (tenantId, input) => request('/exports', { method: 'POST', tenantId, body: input }),
+    exportConversations: tenantId => request('/conversations', { tenantId }),
+    downloadExport: async (tenantId, id, format) => {
+      const response = await fetch(`/api/v1/exports/${encodeURIComponent(id)}/download/${format}`, {
+        headers: { authorization: `Bearer ${token()}`, 'x-tenant-id': tenantId },
+      });
+      if (!response.ok) {
+        const payload = await response.json().catch(() => null);
+        if (response.status === 401) clearToken();
+        throw new ApiError(response.status, payload?.code, payload?.message || '下载失败，请刷新任务后重试');
+      }
+      return { blob: await response.blob(), filename: /filename="([^"]+)"/.exec(response.headers.get('content-disposition') || '')?.[1] || `export-${id}.${format === 'xlsx' ? 'xlsx' : 'txt'}` };
+    },
     knowledgeProducts: tenantId => request('/knowledge/products', { tenantId }),
     knowledgeFaqs: tenantId => request('/knowledge/faqs', { tenantId }),
     knowledgeShortcuts: tenantId => request('/knowledge/shortcuts', { tenantId }),

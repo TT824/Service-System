@@ -54,3 +54,6 @@
 3. 在发消息、派单、转接、审核和导入等异步操作中区分「请求已创建」与「渠道最终成功」。
 4. 注释解释业务原因和接口约束，避免逐行翻译代码；涉及真实 API 时同步更新 `docs/backend-integration.md`。
 5. 提交前运行 `node --check src/app.js`、`node --check src/mock-data.js`、`node --check src/admin.js` 与 `node --check src/admin-data.js`，并在浏览器检查工作台、角色切换与主要操作。
+
+## 数据导出页面
+- `exports`：客服和公司管理员可进入，按服务端授权选择公司，创建顾客或单条会话导出，查看后台任务状态，下载 Excel 和对话记录。下载携带会话令牌，权限由后端校验。

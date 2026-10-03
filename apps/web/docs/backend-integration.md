@@ -77,3 +77,11 @@
 回复工具栏支持表情插入、系统截图粘贴与本地附件草稿：图片不超过 5 MB、视频不超过 50 MB、文件不超过 20 MB，一次选择一个，按会话暂存。当前消息区的视频播放和文件下载均使用浏览器本地对象地址，没有上传或真实外发。正式发送前需上传并取得媒体 ID；类型、时长、大小、病毒扫描和渠道能力由后端确认。邀请下单目前回填示例商品链接；实际商品、规格、有效下单链接及渠道能力须由服务端提供，确认后才发送。
 
 `src/mock-data.js` 仍为联系人、群聊、AI 候选和独立快捷短语页面提供固定示例。统一知识库及商品批量导入已经使用真实 API；发送以外的附件、派单、管理员中心配置和审核仍只修改浏览器内存或显示提示。服务端继续负责身份、权限、租户范围、幂等、审核和最终状态；前端隐藏写入控件只改善体验，不承担鉴权。
+
+## 数据导出对接
+- `GET /api/v1/directory/tenants`：授权公司目录；平台管理员也必须明确选择公司。
+- `GET /api/v1/conversations`：获取当前公司的可选会话。
+- `POST /api/v1/exports`：提交 `{scope: "customers", q, from, to}` 或 `{scope: "conversation", conversationId}`；日期按 UTC 筛选，空日期不提交。
+- `GET /api/v1/exports`：查询最近任务，显示 `status`、`rowCount`、`error`、`artifacts` 及时间戳。
+- `GET /api/v1/exports/:jobId/download/:format`：format 为 xlsx 或 transcript，返回二进制文件，以 Content-Disposition 中的文件名下载。
+- 所有导出、会话和下载请求携带 Bearer 令牌及 x-tenant-id；不使用浏览器角色判断替代服务端鉴权。未完成任务轮询更新，离开页面后取消后续轮询。

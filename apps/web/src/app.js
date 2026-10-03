@@ -162,6 +162,8 @@
   function role(){return el('role-select').value;}
   function safe(value){return String(value).replace(/[&<>"']/g,ch=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]));}
   function navigate(view){
+    window.ExportPortal?.leave();
+    if(view==='exports')window.ExportPortal?.open();
     const restricted={workspace:['agent','merchant'],admin:['agent','merchant'],review:['platform','super'],tenants:['super'],products:['merchant'],knowledge:['agent','merchant'],phrases:['agent','merchant'],analytics:['merchant'],settings:['merchant']};
     if(restricted[view]&&!restricted[view].includes(role())){toast('当前演示角色无权访问此页面');return;}
     document.querySelectorAll('.nav-item').forEach(x=>x.classList.toggle('active',x.dataset.view===view));
@@ -176,7 +178,7 @@
     navigate('admin');
     if(role()==='merchant')window.AdminPortal?.showPermissions(button.dataset.adminPermissions);
   });
-  el('role-select').onchange=()=>{const r=role(); document.querySelectorAll('.nav-item').forEach(x=>{const v=x.dataset.view; x.style.display=(r==='agent'&&!['workspace','admin','knowledge','phrases'].includes(v))||(r==='platform'&&v!=='review')||(r==='merchant'&&['review','tenants'].includes(v))||(r==='super'&&!['review','tenants'].includes(v))?'none':''}); closeProfileMenu();renderProfile();navigate(r==='platform'?'review':r==='super'?'tenants':'workspace');toast('已切换演示角色：'+el('role-select').selectedOptions[0].textContent);};
+  el('role-select').onchange=()=>{const r=role(); document.querySelectorAll('.nav-item').forEach(x=>{const v=x.dataset.view; x.style.display=(r==='agent'&&!['workspace','admin','knowledge','phrases','exports'].includes(v))||(r==='platform'&&v!=='review')||(r==='merchant'&&['review','tenants'].includes(v))||(r==='super'&&!['review','tenants'].includes(v))?'none':''}); closeProfileMenu();renderProfile();navigate(r==='platform'?'review':r==='super'?'tenants':'workspace');toast('已切换演示角色：'+el('role-select').selectedOptions[0].textContent);};
   el('role-select').onchange();
   el('role-select').addEventListener('change',()=>{closeModal();window.AdminPortal?.refreshAccess()});
   function profileInitial(){return [...profile.name.trim()][0]||'客';}
