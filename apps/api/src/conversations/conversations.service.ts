@@ -394,6 +394,22 @@ export class ConversationsService {
     return this.repository.listAssignments(tenantId, conversationId);
   }
 
+  /** Use the transfer route's eligibility rule, including heartbeat expiry. */
+  async transferTargets(tenantId: string, conversationId: string, member: Member) {
+    const { conversation } = await this.requireReadable(tenantId, conversationId, member);
+    const candidates = await this.repository.listAssignmentCandidates(tenantId, undefined);
+    const directory = await this.identity.getDirectoryEntry(member, tenantId);
+    return candidates
+      .filter((target) => target.memberId !== conversation.assignedMemberId &&
+        this.transferRefusal(candidates, target.memberId, undefined) === undefined)
+      .map((target) => ({
+        memberId: target.memberId,
+        displayName: directory.members.find((person) => person.id === target.memberId)?.displayName ?? target.memberId,
+        storeId: target.storeId,
+        inProgressCount: target.inProgressCount,
+      }));
+  }
+
   async claim(
     tenantId: string,
     conversationId: string,

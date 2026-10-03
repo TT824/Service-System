@@ -6,6 +6,7 @@
  */
 (function exposeApiClient() {
   const TOKEN_KEY = 'kefu.access-token';
+  let workspaceTenantId = '';
 
   class ApiError extends Error {
     constructor(status, code, message, details = []) {
@@ -23,13 +24,14 @@
 
   function clearToken() {
     sessionStorage.removeItem(TOKEN_KEY);
+    workspaceTenantId = '';
   }
 
   async function request(path, options = {}) {
     const headers = { accept: 'application/json', ...(options.headers || {}) };
     const accessToken = token();
     if (options.auth !== false && accessToken) headers.authorization = `Bearer ${accessToken}`;
-    if (options.tenantId) headers['x-tenant-id'] = options.tenantId;
+    if (options.tenantId || workspaceTenantId) headers['x-tenant-id'] = options.tenantId || workspaceTenantId;
 
     let body;
     if (options.body !== undefined) {
@@ -49,7 +51,10 @@
     });
     const payload = await response.json().catch(() => null);
     if (!response.ok) {
-      if (response.status === 401 && options.auth !== false) clearToken();
+      if (response.status === 401 && options.auth !== false) {
+        clearToken();
+        if (window.Event && window.dispatchEvent) window.dispatchEvent(new window.Event('kefu:session-expired'));
+      }
       throw new ApiError(
         response.status,
         payload?.code,
@@ -99,6 +104,18 @@
     logout,
     currentSession: () => request('/auth/session'),
     directoryTenants: () => request('/directory/tenants'),
+    setWorkspaceTenant: id => { workspaceTenantId = id || ''; },
+    workspaceTenant: () => workspaceTenantId,
+    suggestions: id => request('/retrieval/suggestions', { method: 'POST', body: { conversationId: id, limit: 3 } }),
+    suggestionDetail: id => request(`/retrieval/suggestions/${encodeURIComponent(id)}`),
+    transferTargets: id => request(`/conversations/${encodeURIComponent(id)}/transfer-targets`),
+    assignments: id => request(`/conversations/${encodeURIComponent(id)}/assignments`),
+    transferConversation: (id, version, toMemberId) => request(`/conversations/${encodeURIComponent(id)}/transfer`, {
+      method: 'POST', body: { expectedVersion: version, toMemberId },
+    }),
+    realtimeResponse: (signal, reconnect) => fetch(`/api/v1/realtime${reconnect ? '?reconnect=true' : ''}`, {
+      signal, headers: { accept: 'text/event-stream', authorization: `Bearer ${token()}`, 'x-tenant-id': workspaceTenantId },
+    }),
     exportJobs: tenantId => request('/exports', { tenantId }),
     createExport: (tenantId, input) => request('/exports', { method: 'POST', tenantId, body: input }),
     exportConversations: tenantId => request('/conversations', { tenantId }),
@@ -114,6 +131,13 @@
       return { blob: await response.blob(), filename: /filename="([^"]+)"/.exec(response.headers.get('content-disposition') || '')?.[1] || `export-${id}.${format === 'xlsx' ? 'xlsx' : 'txt'}` };
     },
     knowledgeProducts: tenantId => request('/knowledge/products', { tenantId }),
+    catalogSpus: tenantId => request('/knowledge/spus', { tenantId }),
+    catalogCategories: tenantId => request('/knowledge/categories', { tenantId }),
+    catalogDetail: (tenantId, id) => request(`/knowledge/spus/${encodeURIComponent(id)}`, { tenantId }),
+    createCatalogSpu: (tenantId, body) => request('/knowledge/spus', { method: 'POST', tenantId, body }),
+    updateCatalogSpu: (tenantId, id, body) => request(`/knowledge/spus/${encodeURIComponent(id)}`, { method: 'PATCH', tenantId, body }),
+    createCatalogSku: (tenantId, id, body) => request(`/knowledge/spus/${encodeURIComponent(id)}/skus`, { method: 'POST', tenantId, body }),
+    updateCatalogSku: (tenantId, id, body) => request(`/knowledge/skus/${encodeURIComponent(id)}`, { method: 'PATCH', tenantId, body }),
     knowledgeFaqs: tenantId => request('/knowledge/faqs', { tenantId }),
     knowledgeShortcuts: tenantId => request('/knowledge/shortcuts', { tenantId }),
     createKnowledgeProduct: (tenantId, input) => request('/knowledge/products', {
@@ -136,13 +160,14 @@
     }),
     previewKnowledgeImport: (tenantId, storeId, file) => productImport(file, storeId, tenantId, 'preview'),
     applyKnowledgeImport: (tenantId, storeId, file) => productImport(file, storeId, tenantId, 'apply'),
-    conversations: () => request('/conversations'),
+    conversations: storeId => request(`/conversations${storeId ? `?storeId=${encodeURIComponent(storeId)}` : ''}`),
     conversation: id => request(`/conversations/${encodeURIComponent(id)}`),
-    sendMessage: (id, content, source) => request(`/conversations/${encodeURIComponent(id)}/messages`, {
+    sendMessage: (id, content, source, candidateId) => request(`/conversations/${encodeURIComponent(id)}/messages`, {
       method: 'POST',
       body: {
         content,
         source,
+        ...(candidateId ? { candidateId } : {}),
         dedupKey: `frontend-${id}-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
       },
     }),

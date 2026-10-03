@@ -5,7 +5,10 @@ const path = require('node:path');
 
 const root = __dirname;
 const port = Number(process.env.WEB_PORT || 5173);
-const apiTarget = new URL(process.env.API_PROXY_TARGET || 'http://127.0.0.1:3000');
+// 与后端共享本地端口配置，避免代理误连占用 3000 的其他桌面应用。
+const envPath = path.resolve(root, '../../.env');
+const configuredPort = fs.existsSync(envPath) ? /^API_PORT\s*=\s*(\d+)\s*$/m.exec(fs.readFileSync(envPath, 'utf8'))?.[1] : null;
+const apiTarget = new URL(process.env.API_PROXY_TARGET || `http://127.0.0.1:${process.env.API_PORT || configuredPort || 3000}`);
 const types = {
   '.html': 'text/html; charset=utf-8',
   '.js': 'text/javascript; charset=utf-8',
@@ -30,6 +33,8 @@ function proxyApi(request, response) {
     headers,
   }, upstreamResponse => {
     response.writeHead(upstreamResponse.statusCode || 502, upstreamResponse.headers);
+    response.flushHeaders();
+    response.on('close', () => upstreamResponse.destroy());
     upstreamResponse.pipe(response);
   });
   upstream.on('error', error => {

@@ -38,13 +38,14 @@
 | 左侧联系人 | 新建分组、调整联系人分组 | 路径待确认 | 变更由服务端校验角色和租户范围，返回分组 ID、版本与更新结果；当前原型只修改浏览器内存。黑名单操作在权限与规则明确前不开放。 |
 | 内部群聊 | 群列表、按名称或成员搜索、新建群、群成员与历史消息、发送消息 | 路径待确认 | 群 ID、租户 ID、成员 ID、消息 ID、发送人、时间、游标与发送状态；创建和发送由服务端校验成员资格与租户范围，实时事件推送新消息。当前仅为本地演示，不能复用微信客服外发接口。 |
 | 会话列表 | 查询当前客服的处理中 / 已结束会话 | 路径待确认 | `conversation_id`、`store_id`、买家脱敏显示名、最近消息、未读数、`state`、`state_version`、接待客服、`ended_at`；“我的会话”下按 active / ended 分类，返回独立计数和分页。结束成功后从处理中移入已结束并保留历史消息；已结束仅可读，服务端同时禁止发送 / 转接。买家联系人可进入对应分类的会话。 |
-| 会话分配 | 系统自动分配并通知目标客服 | 路径待确认 | 服务端按在线状态、店铺范围等规则选择客服，并推送分配事件；前端收到事件后刷新“我的会话”，不提供抢单或退池入口。若暂时无人在线，由服务端等待并在可分配时重试。 |
-| 会话操作 | 转指定客服、结束 | 路径待确认 | 传 `state_version`；转接目标必须在当前授权店铺且在线。 |
+| 会话分配 | 系统自动分配并通知目标客服 | `GET /realtime`、`GET /conversations` | 事件触发 REST 补读，无抢单或退池入口；无人在线等待后端重试分配。 |
+| 会话操作 | 转指定客服、结束、分配历史 | `POST /conversations/:id/transfer`、`POST /conversations/:id/close`、`GET /conversations/:id/assignments` | 写入携带 expectedVersion，转接目标由 transfer-targets 返回，同公司且在线接单。 |
 | 对话区 | 拉取消息、查询外发状态 | 路径待确认 | `message_id`、方向、类型、正文/媒体引用、文件名、大小、时间、`message_source`、发送状态。图片、视频和文件按类型展示；媒体不可用时显示占位或失败原因。 |
-| 回复栏 | 发送最终文本 / 图片 / 视频 / 文件 / 商品 link | `POST /api/v1/messages/send` 文档已指定 | 客服选中候选后回填并可编辑。传候选 ID、最终文本、会话 ID、媒体 ID、幂等键；服务端判定 `direct_candidate` / `edited_send` / `manual_typed` 等来源。视频 / 文件的渠道支持、大小及类型需后端确认。 |
-| 智能辅助 | 获取最多 3 条候选及来源 | 路径待确认 | 候选 ID、文本、商品/FAQ/话术来源切片、检索关键词与分数、生成/降级状态、批次 ID。无可靠命中时显示人工处理提示。 |
+| 回复栏 | 发送最终文本；媒体仍为原型 | `POST /conversations/:id/messages` | content、source、candidateId、dedupKey；展示 deliveries 最终结果，失败不假定成功。 |
+| 智能辅助 | 获取最多 3 条候选及来源 | `POST /retrieval/suggestions`、`GET /retrieval/suggestions/:id` | provider、候选集合 ID、来源 ID、内容、评分、降级原因；人工确认后发送。 |
 | 商品库 | Excel/CSV 导入、清洗错误、异步索引进度 | 路径待确认 | SPU、SKU、类目扩展属性、商品链接、`snapshot_at`、导入任务和索引状态。价格与库存仅作快照展示。 |
 | 统一知识库 | 商品、FAQ、公司快捷话术的列表、创建、编辑和启停 | 已接 `/api/v1/knowledge/products`、`/faqs`、`/shortcuts` 的 GET / POST / PATCH | 平台管理员请求带 `x-tenant-id`；商品和 FAQ 新增带默认 `storeId`，公司话术新增传 `storeId: null`。客服可读但写入由后端返回 403；管理员写入仍由服务端 `requireConfigurator` 校验。 |
+| 统一知识库 | SPU / SKU 详细维护 | 已接 `GET /knowledge/spus`、`GET /knowledge/spus/:id`、`POST /knowledge/spus`、`PATCH /knowledge/spus/:id`、`POST /knowledge/spus/:id/skus`、`PATCH /knowledge/skus/:id`；分类 `GET /knowledge/categories` | 请求带 Bearer 和 `x-tenant-id`；列表按服务端授权返回。详情为 `{spu, skus}`。SPU 创建必填 `storeId/productCode/title`；修改仅提交可变字段。SKU 从所属 SPU 继承门店，前端不指定归属。 |
 | 统一知识库 | 商品 CSV / XLSX 导入预览与应用 | 已接 `POST /api/v1/knowledge/import-batches/preview`、`/apply` | `multipart/form-data` 字段为 `file`、`storeId`；先展示总行数、可导入行和错误，再由管理员确认应用。 |
 | 统一知识库 | 页面内回答测试 | 前端快速匹配，正式召回待接 | 当前从已读取的启用商品、FAQ 和公司快捷话术中展示前三条匹配；正式版本应调用检索接口并返回相关性、来源切片和未命中原因。 |
 | 快捷短语 | 个人 / 团队列表、搜索、创建、编辑、启停与回复栏联想 | 路径待确认 | 团队短语按租户共享，普通客服可读，企业管理员可写；个人短语按登录员工隔离，本人可读写。返回短语 ID、范围、归属员工、标题、分类、关键词、正文、启用状态、版本及使用次数。启停后更新右侧列表和输入联想；写操作需版本、幂等键和服务端权限校验。店铺 / 客服组级范围待评审。 |
@@ -76,7 +77,7 @@
 
 回复工具栏支持表情插入、系统截图粘贴与本地附件草稿：图片不超过 5 MB、视频不超过 50 MB、文件不超过 20 MB，一次选择一个，按会话暂存。当前消息区的视频播放和文件下载均使用浏览器本地对象地址，没有上传或真实外发。正式发送前需上传并取得媒体 ID；类型、时长、大小、病毒扫描和渠道能力由后端确认。邀请下单目前回填示例商品链接；实际商品、规格、有效下单链接及渠道能力须由服务端提供，确认后才发送。
 
-`src/mock-data.js` 仍为联系人、群聊、AI 候选和独立快捷短语页面提供固定示例。统一知识库及商品批量导入已经使用真实 API；发送以外的附件、派单、管理员中心配置和审核仍只修改浏览器内存或显示提示。服务端继续负责身份、权限、租户范围、幂等、审核和最终状态；前端隐藏写入控件只改善体验，不承担鉴权。
+`src/mock-data.js` 仍为联系人、群聊和独立快捷短语页面提供固定示例。登录后的 AI 候选、会话转接、分配历史和实时更新，以及统一知识库和商品批量导入，均已使用真实 API。附件、管理员中心配置和审核仍是演示。服务端继续负责身份、权限、租户范围、幂等、审核和最终状态；前端隐藏控件不承担鉴权。
 
 ## 数据导出对接
 - `GET /api/v1/directory/tenants`：授权公司目录；平台管理员也必须明确选择公司。
@@ -85,3 +86,27 @@
 - `GET /api/v1/exports`：查询最近任务，显示 `status`、`rowCount`、`error`、`artifacts` 及时间戳。
 - `GET /api/v1/exports/:jobId/download/:format`：format 为 xlsx 或 transcript，返回二进制文件，以 Content-Disposition 中的文件名下载。
 - 所有导出、会话和下载请求携带 Bearer 令牌及 x-tenant-id；不使用浏览器角色判断替代服务端鉴权。未完成任务轮询更新，离开页面后取消后续轮询。
+
+## 工作台已接入的接口
+- `POST /api/v1/retrieval/suggestions`：`{conversationId, limit:3}`，自动按最新客户消息检索；`GET /retrieval/suggestions/:id` 查询持久化集合。返回 `provider`、`candidates`（kind/sourceId/title/content/score/tenantId/storeId）和 `fallbackReasons`。未配置模型时展示知识库候选，不展示模拟生成内容。
+- `POST /api/v1/conversations/:id/messages`：content/source/dedupKey/candidateId；candidateId 保存候选集合 ID。直接选用为 direct_candidate，编辑后为 edited_send；仅人工确认发送。
+- 新增 `GET /api/v1/conversations/:id/transfer-targets`：先校验会话可读权限，复用转接资格规则，返回在线接单且心跳有效的其他客服（memberId/displayName/storeId/inProgressCount）。范围同公司，允许跨门店；最终写操作再次校验资格。
+- `POST /api/v1/conversations/:id/transfer`：`{expectedVersion,toMemberId}`。409 提示状态变化并补读。`GET /conversations/:id/assignments` 展示 action/result/reasonCode/fromMemberId/toMemberId/stateVersionBefore/stateVersionAfter/createdAt。
+- `GET /api/v1/realtime`：fetch 流式读取，以请求头携带令牌，不把令牌放入 URL。realtime.connected / conversation.opened / conversation.updated / message.created / message.delivery_updated 触发 REST 补读；presence.changed 同步本账号状态，ping 续活。
+- 消息结果来自会话详情的 deliveries，独立 Worker 写入的 pending 状态每 5 秒补读。成功写入发送队列不等于渠道最终发送成功。
+- 本地开发服务自动读取根 `.env` 的 API_PORT，API_PROXY_TARGET 可覆盖；本机使用 API 3002、Worker 3001、Web 5173，避免误连占用 3000 的微信小店助手。
+
+## 2026-10-03：结构化 SPU / SKU 维护契约
+
+- `src/catalog.js` 管理独立商品目录；旧 `products` 条目保留，不自动迁移、不互相覆盖。导入应用写入结构化目录，可在 SPU / SKU 页签刷新查看。
+- SPU 可变字段：`categoryId`（清空传 null）、`title`、`subtitle`、`mainImageUrl`、`productUrl`（后三者清空传 null）、`sellingPoints`（数组）、`commonAttributes`（string / number / boolean 标量记录）、`shelfStatus`（on_shelf / off_shelf / unknown）。创建时可设置 `externalProductId`，`sourceType` 固定 manual；编码、门店、外部 ID 和来源创建后不通过 PATCH 修改。
+- SKU 新增字段：`skuCode`、`externalSkuId`、`variant`、`searchAttributes`、`status`；修改仅 `skuCode/variant/searchAttributes/status`，外部 ID 锁定。规格和检索属性都是字符串键值记录，移除行后提交完整记录；状态 active / inactive。没有价格和库存写入字段。
+- UI 新增 / 保存按钮仅对登录的 merchant_admin / platform_admin 开放；客服详情所有编辑字段禁用。写操作仍由服务端 requireConfigurator 和租户 / 门店范围校验，UI 不承担鉴权。后端当前无该资源的 state_version / Idempotency-Key 契约，前端不虚构；请求期间禁用保存防止连续点击，不能代替后端并发保护。
+- 数值、布尔、重复属性和必填内容先在界面校验；服务端错误显示并保留输入。切换账号清空旧目录和详情，迟到的读取结果不能覆盖新建表单。
+- 本轮验证：6 项目录交互 / API 适配测试及原 3 项工作台测试通过，10 个脚本语法检查通过；真实客服只读、管理员维护入口及必填校验通过。实际公司结构化列表为空，创建 / 修改写入在自动测试替身验证；尚未用真实商品完成数据库写入与刷新持久化验证。
+
+## 2026-10-03：退出与鉴权失效清理
+
+- 鉴权 REST 请求返回 401 时，API 适配清除令牌并发送本页 `kefu:session-expired` 事件；密码登录失败的 401 不触发已登录会话失效事件。SSE unauthorized 同样清除前端身份并返回登录。
+- 退出立即清除 UI 会话及旧知识数据，角色显示未登录；后台撤销请求结束前禁用新登录，避免旧请求清除新令牌。公司范围和 SPU / SKU 数据不跨账号复用，迟到结果不更新已退出页面。
+- 管理员可写需要真实已连接会话及后端角色；UI 角色下拉不提供模拟提权。真实管理员登录 / 退出 / 再登录验证通过，12 项前端回归测试及 10 个脚本语法检查通过；实际商品写入持久化验证限制不变。

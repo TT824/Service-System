@@ -15,7 +15,7 @@
   const quickPhrases=structuredClone(window.CustomerServiceMock.quickPhrases);
   let phrasePageScope='个人',phraseAsideScope='个人',assistView='ai';
   let knowledgeTab='products',knowledgeLoaded=false,knowledgeLoading=false,knowledgeEditingId=null;
-  let knowledgeScope=null;
+  let knowledgeScope=null,knowledgeEpoch=0;
   const knowledgeState={products:[],faqs:[],shortcuts:[]};
   let phraseMatches=[], phraseIndex=0, phraseRange=null, replyComposing=false;
   const groupChats = JSON.parse(JSON.stringify(window.CustomerServiceMock.groupChats));
@@ -24,6 +24,9 @@
   let conversationStatus='active';
   const profile={name:'陈小雨',phoneRaw:'13800002068',phoneMasked:'138****2068',avatarUrl:''};
   let backendSession=null,backendConnected=false,heartbeatTimer=null;
+  let stopRealtime=null,refreshTimer=null,deliveryTimer=null,refreshRunning=false,refreshAgain=false,workspaceEpoch=0,workspaceStoreId='';
+  let selectedCandidateId=null,selectedCandidateConversation=null;
+  const remoteSuggestions=new Map();
   let profileAvatarObjectUrl='';
   const expandedContactGroups=new Set(['team:售前客服','buyers:重点客户']);
   const el=id=>document.getElementById(id);
@@ -49,6 +52,7 @@
     return {
       id:row.id,
       backendId:row.id,
+      tenantId:row.tenantId,
       name,
       initial:[...name][0]||'客',
       preview:previous?.preview||'点击查看会话记录',
@@ -67,6 +71,7 @@
     const sourceLabels={manual_typed:'手打',direct_candidate:'直接采纳',edited_send:'编辑后发送',welcome:'欢迎语',offline_auto_reply:'离线回复',other:'其他'};
     return {
       id:message.id,
+      direction:message.direction,
       by:message.direction==='outbound'?'agent':'customer',
       time:formatBackendTime(message.createdAt),
       text:message.content||`[${message.messageType||'消息'}]`,
@@ -75,19 +80,28 @@
   }
   async function loadConversationDetail(id){
     if(!backendConnected||!id)return;
+    const epoch=workspaceEpoch;
     const detail=await api.conversation(id);
+    if(epoch!==workspaceEpoch||!backendConnected)return;
     const index=conversations.findIndex(item=>String(item.id)===String(id));
     if(index<0)return;
     const mapped=backendConversationOf(detail.conversation,conversations[index]);
     mapped.messages=(detail.messages||[]).map(backendMessageOf);
     mapped.preview=mapped.messages.at(-1)?.text||mapped.preview;
     mapped.canReply=detail.canReply;
+    mapped.canTakeOver=detail.canTakeOver;
+    for(const item of detail.deliveries||[]){
+      const message=mapped.messages.find(row=>row.id===item.delivery.messageId);
+      if(message)message.deliveryStatus=item.delivery.status;
+    }
     conversations[index]=mapped;
-    currentId=mapped.id;
-    renderAll();
+    if(String(currentId)===String(id))renderAll();
   }
   async function loadRemoteConversations(){
-    const rows=await api.conversations();
+    const epoch=workspaceEpoch;
+    const storeId=workspaceStoreId;
+    const rows=await api.conversations(storeId);
+    if(epoch!==workspaceEpoch||!backendConnected||storeId!==workspaceStoreId)return;
     const previous=new Map(conversations.map(item=>[String(item.id),item]));
     const mapped=(rows||[]).map(row=>backendConversationOf(row,previous.get(String(row.id))));
     conversations.splice(0,conversations.length,...mapped);
@@ -96,6 +110,54 @@
     conversationStatus=conversations.find(item=>String(item.id)===String(currentId))?.status||'active';
     renderAll();
     if(currentId!==null)await loadConversationDetail(currentId);
+  }
+  function stopWorkspaceRealtime(){
+    workspaceEpoch++;stopRealtime?.();stopRealtime=null;clearTimeout(refreshTimer);refreshTimer=null;
+    clearInterval(deliveryTimer);
+    refreshAgain=false;remoteSuggestions.clear();selectedCandidateId=null;selectedCandidateConversation=null;
+  }
+  function refreshWorkspace(){
+    if(!backendConnected)return;
+    refreshAgain=true;
+    if(refreshRunning||refreshTimer)return;
+    refreshTimer=setTimeout(async()=>{
+      refreshTimer=null;refreshRunning=true;
+      try{
+        while(refreshAgain&&backendConnected){refreshAgain=false;await loadRemoteConversations()}
+      }catch(error){toast(error.message||'会话同步失败')}
+      finally{refreshRunning=false}
+    },150);
+  }
+  async function startWorkspaceRealtime(){
+    stopWorkspaceRealtime();
+    const epoch=workspaceEpoch;
+    const directories=await api.directoryTenants();
+    if(epoch!==workspaceEpoch||!backendConnected)return;
+    const tenant=backendSession.access?.tenantId||backendSession.access?.member?.tenantId;
+    const entry=directories.find(item=>item.tenant.id===tenant)||directories.find(item=>item.tenant.enabled!==false);
+    if(!entry)throw new Error('当前账号没有可用的公司范围');
+    api.setWorkspaceTenant(entry.tenant.id);workspaceStoreId='';
+    el('store-select').innerHTML='<option value="">公司全部门店</option>'+(entry.stores||[]).filter(store=>store.enabled!==false).map(store=>`<option value="${safe(store.id)}">${safe(store.name)}</option>`).join('');
+    el('store-select').disabled=false;
+    await loadRemoteConversations();
+    if(epoch!==workspaceEpoch||!backendConnected)return;
+    stopRealtime=window.KefuRealtime.subscribe(api,frame=>{
+      if(epoch!==workspaceEpoch)return;
+      if(frame.event_type==='realtime.ping')return;
+      if(frame.event_type==='presence.changed'){
+        if(frame.data.member_id===backendSession?.access?.member?.id)updatePresence({accepting:'online',busy:'suspended',away:'suspended',offline:'offline'}[frame.data.status]||'offline');
+        return;
+      }
+      refreshWorkspace();
+    },state=>{
+      if(epoch!==workspaceEpoch)return;
+      el('realtime-status').textContent={connecting:'实时连接中',connected:'实时已连接',reconnecting:'实时重连中',unauthorized:'实时鉴权失效，请重新登录'}[state];
+      if(state==='unauthorized'){clearBackendSession();setBackendStatus('登录已失效 · 请重新登录','error');navigate('login');setAuthStatus('实时鉴权失效，请重新登录','error')}
+    });
+    // Worker 在独立进程写入投递结果；待发送消息需补读，不能仅依赖 API 进程内事件总线。
+    deliveryTimer=setInterval(()=>{
+      if(el('workspace').classList.contains('active')&&activeConversation()?.messages.some(message=>message.deliveryStatus==='pending'))refreshWorkspace();
+    },5000);
   }
   function applyBackendSession(session){
     backendSession=session;
@@ -107,7 +169,7 @@
     profile.phoneMasked=account.phone?`${account.phone.slice(0,3)}****${account.phone.slice(-4)}`:'未绑定';
     profile.avatarUrl=account.avatar_url||'';
     const mappedRole=frontendRoleOf(access.role);
-    knowledgeLoaded=false;knowledgeScope=null;knowledgeEditingId=null;
+    clearKnowledgeData();
     el('role-select').disabled=false;
     el('role-select').value=mappedRole;
     el('role-select').onchange();
@@ -122,33 +184,40 @@
   }
   async function bootstrapBackend(){
     if(!api?.hasSession()){
+      clearBackendSession();
+      const epoch=knowledgeEpoch;
       try{
         await api.health();
+        if(epoch!==knowledgeEpoch)return;
         setBackendStatus('业务后端已就绪 · 请登录','connected');
         setAuthStatus('请输入后端账号和密码');
       }catch(error){
+        if(epoch!==knowledgeEpoch)return;
         setBackendStatus('业务后端尚未就绪','error');
         setAuthStatus(error.message||'无法连接业务后端','error');
       }
       navigate('login');
       return;
     }
+    const epoch=knowledgeEpoch;
     try{
       const session=await api.currentSession();
+      if(epoch!==knowledgeEpoch||!api.hasSession())return;
       applyBackendSession(session);
       if(session.access?.role==='agent'){
         await api.presence('accepting');
         updatePresence('online');
-        await loadRemoteConversations();
+        await startWorkspaceRealtime();
         navigate('workspace');
         clearInterval(heartbeatTimer);
         heartbeatTimer=setInterval(()=>api.heartbeat().catch(()=>{}),25000);
       }else{
+        await startWorkspaceRealtime();
         navigate(session.access?.role==='platform_admin'||session.access?.role==='merchant_admin'?'admin':'account');
       }
     }catch(error){
-      backendConnected=false;
-      api.clearToken();
+      stopWorkspaceRealtime();
+      clearBackendSession();
       setBackendStatus('业务后端连接失败','error');
       setAuthStatus(error.message||'无法恢复登录，请重新登录','error');
       navigate('login');
@@ -162,6 +231,8 @@
   function role(){return el('role-select').value;}
   function safe(value){return String(value).replace(/[&<>"']/g,ch=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]));}
   function navigate(view){
+    // 退出后，演示下拉框和旧 DOM 不能继续代表真实账号权限。
+    if(!backendConnected&&!['login','account'].includes(view))view='login';
     window.ExportPortal?.leave();
     if(view==='exports')window.ExportPortal?.open();
     const restricted={workspace:['agent','merchant'],admin:['agent','merchant'],review:['platform','super'],tenants:['super'],products:['merchant'],knowledge:['agent','merchant'],phrases:['agent','merchant'],analytics:['merchant'],settings:['merchant']};
@@ -178,7 +249,7 @@
     navigate('admin');
     if(role()==='merchant')window.AdminPortal?.showPermissions(button.dataset.adminPermissions);
   });
-  el('role-select').onchange=()=>{const r=role(); document.querySelectorAll('.nav-item').forEach(x=>{const v=x.dataset.view; x.style.display=(r==='agent'&&!['workspace','admin','knowledge','phrases','exports'].includes(v))||(r==='platform'&&v!=='review')||(r==='merchant'&&['review','tenants'].includes(v))||(r==='super'&&!['review','tenants'].includes(v))?'none':''}); closeProfileMenu();renderProfile();navigate(r==='platform'?'review':r==='super'?'tenants':'workspace');toast('已切换演示角色：'+el('role-select').selectedOptions[0].textContent);};
+  el('role-select').onchange=()=>{const r=role(); document.querySelectorAll('.nav-item').forEach(x=>{const v=x.dataset.view; x.style.display=r==='unauth'||(r==='agent'&&!['workspace','admin','knowledge','phrases','exports'].includes(v))||(r==='platform'&&v!=='review')||(r==='merchant'&&['review','tenants'].includes(v))||(r==='super'&&!['review','tenants'].includes(v))?'none':''}); closeProfileMenu();renderProfile();navigate(r==='platform'?'review':r==='super'?'tenants':r==='unauth'?'login':'workspace');};
   el('role-select').onchange();
   el('role-select').addEventListener('change',()=>{closeModal();window.AdminPortal?.refreshAccess()});
   function profileInitial(){return [...profile.name.trim()][0]||'客';}
@@ -233,17 +304,34 @@
   }
   async function signOut(){
     closeProfileMenu();
-    clearInterval(heartbeatTimer);
-    if(backendConnected){
-      try{await api.logout()}catch(error){console.warn('退出后端会话失败',error)}
-    }
-    backendConnected=false;backendSession=null;
-    el('role-select').disabled=false;
+    // 启动撤销请求时已经捕获令牌，界面立即清空，不等待网络响应。
+    const revoke=backendConnected?api.logout():Promise.resolve();
+    el('auth-submit').disabled=true;
+    clearBackendSession();
     setBackendStatus('已退出 · 请重新登录');
     setAuthStatus('已退出当前账号');
     navigate('login');
     toast('已退出账号');
+    try{await revoke}catch(error){console.warn('退出后端会话失败',error)}finally{el('auth-submit').disabled=false}
   }
+  function clearKnowledgeData(){
+    knowledgeEpoch++;knowledgeLoaded=false;knowledgeLoading=false;knowledgeScope=null;knowledgeEditingId=null;
+    Object.values(knowledgeState).forEach(items=>items.splice(0));
+    window.KefuCatalog?.reset();
+    el('knowledge-form').reset();el('knowledge-list').innerHTML='';el('knowledge-count').textContent='—';
+    el('knowledge-test-result').textContent='';el('knowledge-scope-note').textContent='请登录后查看知识库';
+  }
+  function clearBackendSession(){
+    stopWorkspaceRealtime();clearInterval(heartbeatTimer);backendConnected=false;backendSession=null;api?.clearToken();
+    clearKnowledgeData();conversations.splice(0);currentId=null;replyAttachments.clear();closeModal();
+    Object.assign(profile,{name:'未登录',phoneRaw:'',phoneMasked:'未登录',avatarUrl:''});
+    el('role-select').value='unauth';el('role-select').disabled=true;
+    el('store-select').innerHTML='<option>请登录后选择门店</option>';el('store-select').disabled=true;
+    el('auth-secret').value='';el('role-select').onchange();
+  }
+  window.addEventListener('kefu:session-expired',()=>{
+    clearBackendSession();setBackendStatus('登录已失效 · 请重新登录','error');setAuthStatus('登录已失效，请重新登录','error');navigate('login');
+  });
   el('profile-btn').onclick=()=>el('profile-menu').hidden?openProfileMenu():closeProfileMenu(true);
   el('profile-btn').addEventListener('keydown',event=>{if(event.key==='ArrowUp'){event.preventDefault();openProfileMenu();el('profile-change-avatar').focus()}});
   el('profile-menu').addEventListener('keydown',event=>{if(event.key==='Escape'){event.preventDefault();closeProfileMenu(true)}});
@@ -427,7 +515,8 @@
     if(!c){el('messages').innerHTML='';el('send-btn').disabled=true;return}
     const storeLabel=backendConnected?c.store:`青禾生活${c.store}`;
     el('chat-name').innerHTML=`${safe(c.name)} <span class="pill ${c.status==='ended'?'gray':'blue'}" id="chat-status">${c.status==='ended'?'已结束':'接待中'}</span>`; el('chat-subtitle').textContent=`企业微信客服 · ${storeLabel} · ${c.status==='ended'?'会话已结束':c.canReply===false?'只读会话':'接待人 '+profile.name}`;
-    el('messages').innerHTML='<div class="day">会话记录</div>'+c.messages.map(m=>`<div class="message ${m.by==='agent'?'agent':''}"><div class="avatar">${m.by==='agent'?safe(profileInitial()):safe(c.initial)}</div><div class="message-content"><div class="message-meta">${m.by==='agent'?safe(profile.name):safe(c.name)} · ${m.time}${m.source?' · '+safe(m.source):''}</div><div class="bubble"></div></div></div>`).join('');
+    const deliveryLabels={pending:'等待渠道发送',sent:'渠道已发送',failed:'渠道发送失败',unknown:'渠道结果未知'};
+    el('messages').innerHTML='<div class="day">会话记录</div>'+c.messages.map(m=>`<div class="message ${m.by==='agent'?'agent':''}"><div class="avatar">${m.by==='agent'?safe(profileInitial()):safe(c.initial)}</div><div class="message-content"><div class="message-meta">${m.by==='agent'?safe(profile.name):safe(c.name)} · ${m.time}${m.source?' · '+safe(m.source):''}${m.deliveryStatus?' · '+safe(deliveryLabels[m.deliveryStatus]||m.deliveryStatus):''}</div><div class="bubble"></div></div></div>`).join('');
     el('messages').querySelectorAll('.message .bubble').forEach((x,i)=>x.textContent=c.messages[i].text);
     el('messages').querySelectorAll('.message .bubble').forEach((bubble,index)=>{
       const attachment=c.messages[index].attachment;
@@ -443,7 +532,9 @@
     renderAttachment();
     el('messages').scrollTop=el('messages').scrollHeight; el('send-btn').disabled=c.status==='ended'||presenceState==='offline'||c.canReply===false;
     el('close-btn').hidden=c.status==='ended';
-    el('transfer-btn').hidden=c.status==='ended'||backendConnected;
+    el('transfer-btn').hidden=c.status==='ended'||backendConnected&&(c.rawStatus!=='claimed'||c.canReply!==true&&!c.canTakeOver);
+    el('assignment-history-btn').hidden=!backendConnected;
+    el('close-btn').hidden=c.status==='ended'||backendConnected&&c.canReply!==true&&!c.canTakeOver;
   }
   // Candidate response source is returned asynchronously after message intake.
   // Preserve candidate ID, source chunks, score and degradation reason in the API.
@@ -456,12 +547,7 @@
       el('candidates').innerHTML='<div class="footnote">历史会话仅供查看聊天记录。</div>';return;
     }
     if(backendConnected){
-      currentSuggestions=[];
-      el('candidate-label').textContent='真实会话已接入';
-      el('candidate-status').textContent='AI 待配置';
-      el('candidate-detail').disabled=true;
-      el('product-section').style.display='none';
-      el('candidates').innerHTML='<div class="footnote">当前使用后端真实会话。生成模型尚未配置，首轮整合暂不显示模拟候选。</div>';
+      renderRemoteCandidates(c);
       return;
     }
     // The switch pauses AI suggestions only; manual replies, shortcuts and
@@ -482,6 +568,48 @@
     el('product-section').style.display=[1,4].includes(c.id)?'':'none';
     el('candidates').innerHTML=currentSuggestions.length?currentSuggestions.map((s,i)=>`<div class="candidate"><div class="candidate-top"><span class="candidate-title">${i+1}. ${safe(s.title)}</span><span class="pill ${i===0?'blue':'gray'}">${i===0?'优先':'备选'}</span></div><p>${safe(s.text)}</p><div class="candidate-bottom"><span class="source" title="${safe(s.source)}">${safe(s.source)}</span><button class="use-btn" data-index="${i}">选用 ↗</button></div></div>`).join(''):'<div class="footnote">知识库未命中可靠内容，请客服手动回复或使用快捷短语。</div>';
     document.querySelectorAll('.use-btn').forEach(b=>b.onclick=()=>{const i=Number(b.dataset.index);el('reply').value=currentSuggestions[i].text;selectedSuggestion=i;originalSuggestion=currentSuggestions[i].text;el('reply-hint').textContent='已选用第 '+(i+1)+' 条候选 · 可编辑后发送';el('reply').focus();toast('候选回复已填入编辑区')});
+  }
+  function candidateReason(code){return {no_generation_provider:'未配置生成模型，使用知识库检索回复',no_knowledge_match:'知识库未命中',empty_query:'暂无客户问题',semantic_recall_unavailable:'语义检索不可用，使用关键词检索',generation_provider_failed:'生成模型失败，使用知识库检索回复',safety_blocked:'候选因内容安全规则被过滤'}[code]||code}
+  function renderRemoteCandidates(c){
+    const latest=c.messages.filter(message=>message.direction==='inbound').at(-1);
+    const key=latest?.id||'';
+    let state=remoteSuggestions.get(c.id);
+    el('product-section').style.display='none';el('candidate-detail').disabled=true;
+    currentSuggestions=[];
+    if(!assistEnabled||!latest||c.canReply!==true){
+      el('candidate-label').textContent=!assistEnabled?'AI 辅助已暂停':'暂无候选回复';
+      el('candidate-status').textContent='等待';
+      el('candidates').innerHTML='<div class="footnote">'+(!assistEnabled?'开启辅助后获取候选。':c.canReply!==true?'当前会话只读。':'等待客户发来问题。')+'</div>';return;
+    }
+    if(!state||state.key!==key){
+      state={key,loading:true};remoteSuggestions.set(c.id,state);
+      const epoch=workspaceEpoch;
+      api.suggestions(c.id).then(set=>{
+        if(epoch!==workspaceEpoch||remoteSuggestions.get(c.id)!==state)return;
+        state.set=set;state.loading=false;
+        if(String(currentId)===String(c.id))renderCandidates();
+      }).catch(error=>{
+        if(epoch!==workspaceEpoch||remoteSuggestions.get(c.id)!==state)return;
+        state.error=error.message;state.loading=false;
+        if(String(currentId)===String(c.id))renderCandidates();
+      });
+    }
+    el('candidate-label').textContent=state.loading?'正在获取候选':state.error?'候选获取失败':`${state.set.candidates.length} 条候选回复`;
+    el('candidate-status').textContent=state.loading?'检索中':state.set?.provider==='deepseek'?'模型生成':'知识库检索';
+    if(state.loading){el('candidates').innerHTML='<div class="footnote">正在检索当前公司的知识库…</div>';return}
+    el('candidate-detail').disabled=!state.set;
+    const reasons=(state.set?.fallbackReasons||[]).map(candidateReason).join('；');
+    currentSuggestions=(state.set?.candidates||[]).map(item=>({...item,text:item.content,source:`${item.kind} · ${item.title} · 评分 ${Number(item.score).toFixed(3)}`}));
+    el('candidates').innerHTML=`<div class="footnote">${safe(state.error||reasons||'候选来自后端，请人工确认后发送。')}</div>`+currentSuggestions.map((item,index)=>`<div class="candidate"><div class="candidate-top"><span class="candidate-title">${index+1}. ${safe(item.title)}</span></div><p>${safe(item.text)}</p><div class="candidate-bottom"><span class="source" title="${safe(item.sourceId)}">${safe(item.source)}</span><button class="use-btn" data-index="${index}">选用 ↗</button></div></div>`).join('')+`<button class="btn" id="refresh-candidates">重新获取候选</button>`;
+    el('refresh-candidates').onclick=()=>{remoteSuggestions.delete(c.id);renderCandidates()};
+    el('candidates').querySelectorAll('.use-btn').forEach(button=>button.onclick=()=>{
+      const index=Number(button.dataset.index),item=currentSuggestions[index];
+      if(String(currentId)!==String(c.id))return;
+      el('reply').value=item.text;selectedSuggestion=index;originalSuggestion=item.text;
+      // 后端的候选标识是持久化的 suggestion set ID，单条来源另由详情保留。
+      selectedCandidateId=state.set.id;selectedCandidateConversation=c.id;
+      el('reply-hint').textContent='已选用候选 · 可编辑后发送';el('reply').focus();
+    });
   }
   // Dashboard values are illustrative. In production the server supplies
   // scoped KPI values and metric availability for the selected store and date.
@@ -562,9 +690,12 @@
       const backendSource=selectedSuggestion<0?'manual_typed':text===originalSuggestion?'direct_candidate':'edited_send';
       el('send-btn').disabled=true;
       try{
-        await api.sendMessage(c.backendId,text,backendSource);
-        el('reply').value='';selectedSuggestion=-1;originalSuggestion='';
-        el('reply-hint').textContent='Enter 发送 · Shift+Enter 换行';
+        const candidateId=selectedSuggestion>=0&&String(selectedCandidateConversation)===String(c.id)?selectedCandidateId:null;
+        await api.sendMessage(c.backendId,text,candidateId?backendSource:'manual_typed',candidateId);
+        if(String(currentId)===String(c.id)&&el('reply').value.trim()===text){
+          el('reply').value='';selectedSuggestion=-1;originalSuggestion='';selectedCandidateId=null;selectedCandidateConversation=null;
+          el('reply-hint').textContent='Enter 发送 · Shift+Enter 换行';
+        }
         await loadRemoteConversations();
         toast('消息已写入后端发送队列');
       }catch(error){toast(error.message||'消息发送失败')}
@@ -666,7 +797,38 @@
     renderAll();
     toast('会话已移至“已结束”（模拟）');
   };
-  el('transfer-btn').onclick=()=>showModal('转接会话','选择当前店铺在线的客服。转接失败时会话仍归当前客服。',()=>toast('已转接给 李明（模拟）'),'<select class="field"><option>李明 · 在线接单</option><option>赵萌 · 在线接单</option></select>');
+  el('transfer-btn').onclick=async()=>{
+    if(!backendConnected){showModal('转接会话','选择当前店铺在线的客服。',()=>toast('已转接给 李明（模拟）'),'<select class="field"><option>李明 · 在线接单</option></select>');return}
+    const c=activeConversation(),epoch=workspaceEpoch;
+    if(!c)return;
+    try{
+      const targets=await api.transferTargets(c.id);
+      if(epoch!==workspaceEpoch||String(currentId)!==String(c.id))return;
+      if(!targets.length){toast('暂无在线接单的其他客服');return}
+      showModal('转接会话','选择公司内在线接单的客服。后端会再次校验接待资格与会话版本。',()=>{
+        const targetId=el('transfer-target').value;
+        el('modal-confirm').disabled=true;
+        void api.transferConversation(c.id,c.version,targetId).then(async()=>{
+          closeModal();await loadRemoteConversations();toast('会话转接已完成');
+        }).catch(error=>{
+          el('modal-confirm').disabled=false;toast(error.status===409?'会话或客服状态已变化，请刷新后重试':error.message);
+          refreshWorkspace();
+        });
+        return false;
+      },`<label for="transfer-target">接收客服</label><select id="transfer-target" class="field">${targets.map(target=>`<option value="${safe(target.memberId)}">${safe(target.displayName)} · 在线接单 · ${target.inProgressCount} 个会话</option>`).join('')}</select>`,'确认转接');
+    }catch(error){toast(error.message||'无法读取转接名单')}
+  };
+  el('assignment-history-btn').onclick=async()=>{
+    const c=activeConversation(),epoch=workspaceEpoch;if(!backendConnected||!c)return;
+    try{
+      const [rows,directories]=await Promise.all([api.assignments(c.id),api.directoryTenants()]);
+      if(epoch!==workspaceEpoch||String(currentId)!==String(c.id))return;
+      const members=directories.flatMap(entry=>entry.members||[]);
+      const name=id=>members.find(member=>member.id===id)?.displayName||id||'未分配';
+      const actions={auto_assign:'自动分配',claim:'接手',return:'退回',transfer:'转接',close:'结束'};
+      showModal('会话分配历史','按时间倒序展示服务端记录，包含成功和失败的尝试。',()=>{},rows.length?`<div class="assignment-history">${rows.map(row=>`<div class="review-card"><strong>${safe(actions[row.action]||row.action)} · ${safe({succeeded:'成功',failed:'失败',success:'成功',refused:'拒绝'}[row.result]||row.result)}</strong><p>${safe(name(row.fromMemberId))} → ${safe(name(row.toMemberId))}</p><small>${safe(new Date(row.createdAt).toLocaleString('zh-CN'))} · 版本 ${row.stateVersionBefore} → ${row.stateVersionAfter??'未改变'}${row.reasonCode?' · '+safe(row.reasonCode):''}</small></div>`).join('')}</div>`:'暂无分配记录','关闭');
+    }catch(error){toast(error.message||'分配历史读取失败')}
+  };
   function phraseCategory(phrase){
     if(phrase.category)return phrase.category;
     if(/视频|安装/.test(phrase.title))return '使用教程';
@@ -823,7 +985,15 @@
     insertReplyText('您可以通过商品链接选择规格并下单：\nhttps://shop.example.com/products/thermos-500');
     toast('下单邀请已填入，请确认后发送（示例链接）');
   },'<div class="product-card"><div class="product-image">☕</div><div><div class="product-name">轻享保温杯 · 500ml</div><div class="product-detail">黑色 / 米白色</div><div class="footnote">演示商品链接</div></div></div>');
-  el('candidate-detail').onclick=()=>showModal('本次候选的检索依据','系统优先在当前店铺检索已锁定商品，再参考商品规格、核心卖点与相关 FAQ。当前为界面示例数据。',()=>{},'<div class="review-card" style="font-size:12px">命中商品：轻享保温杯 500ml<br>规格片段：黑色 / 米白色<br>卖点片段：双层真空结构<br>检索状态：已完成</div>');
+  el('candidate-detail').onclick=async()=>{
+    if(!backendConnected){showModal('本次候选的检索依据','当前为界面示例数据。',()=>{},'<div class="review-card">命中商品：轻享保温杯 500ml</div>');return}
+    const c=activeConversation(),state=remoteSuggestions.get(c?.id),epoch=workspaceEpoch;if(!state?.set)return;
+    try{
+      const set=await api.suggestionDetail(state.set.id);
+      if(epoch!==workspaceEpoch||String(currentId)!==String(c.id))return;
+      showModal('候选来源与检索依据',`生成方式：${set.provider==='deepseek'?'模型生成':'知识库检索'}；${(set.fallbackReasons||[]).map(candidateReason).join('；')||'无降级'}。`,()=>{},`<div class="assignment-history">${set.candidates.map(item=>`<div class="review-card"><strong>${safe(item.title)}</strong><p>${safe(item.content)}</p><small>来源：${safe(item.kind)} / ${safe(item.sourceId)} · 评分 ${safe(item.score)}<br>公司 ${safe(item.tenantId)} · 门店 ${safe(item.storeId)}</small></div>`).join('')||'暂无候选'}</div>`,'关闭');
+    }catch(error){toast(error.message||'候选详情读取失败')}
+  };
   // TODO(API): Persist presence per authorized store. Only "online" participates
   // in automatic assignment. "exit" is a separate sign-out action, not a state.
   function closeStatusMenu(restoreFocus=false){
@@ -884,7 +1054,7 @@
     el('assist-toggle').setAttribute('aria-pressed',String(assistEnabled));
     el('assist-toggle').textContent=assistEnabled?'◉ 停止辅助':'○ 开启辅助';
     renderCandidates();
-    toast(assistEnabled?'AI 辅助已开启（模拟）':'AI 辅助已暂停，仍可人工回复（模拟）');
+    toast(assistEnabled?'AI 辅助已开启':'AI 辅助已暂停，仍可人工回复');
   };
   el('overview-toggle').onclick=()=>{
     const expanded=el('overview-toggle').getAttribute('aria-expanded')==='true';
@@ -892,14 +1062,18 @@
     el('overview-toggle').innerHTML=expanded?'展开 <span aria-hidden="true">⌄</span>':'收起 <span aria-hidden="true">⌄</span>';
     el('overview-details').hidden=expanded;
   };
-  el('store-select').onchange=()=>toast('已选择 '+el('store-select').selectedOptions[0].textContent+'；原型展示固定示例数据');
+  el('store-select').onchange=()=>{
+    if(backendConnected){workspaceStoreId=el('store-select').value;currentId=null;remoteSuggestions.clear();refreshWorkspace();return}
+    toast('已选择 '+el('store-select').selectedOptions[0].textContent+'；原型展示固定示例数据');
+  };
 
   const knowledgeMeta={
+    catalog:{singular:'SPU / SKU',add:'创建 SPU',search:'搜索 SPU 编码、标题、卖点或公共属性'},
     products:{singular:'商品',add:'录入商品',search:'搜索商品名称、SKU 或描述'},
     faqs:{singular:'常见问题',add:'录入常见问题',search:'搜索问题、答案或标签'},
     shortcuts:{singular:'快捷话术',add:'录入快捷话术',search:'搜索代码、标题或话术内容'},
   };
-  function canWriteKnowledge(){return role()==='merchant'&&['merchant_admin','platform_admin'].includes(backendSession?.access?.role)}
+  function canWriteKnowledge(){return backendConnected&&role()==='merchant'&&['merchant_admin','platform_admin'].includes(backendSession?.access?.role)}
   function knowledgeItems(){return knowledgeState[knowledgeTab]||[]}
   function knowledgeStoreName(storeId){return knowledgeScope?.stores?.find(store=>store.id===storeId)?.name||storeId||'公司通用'}
   function knowledgeDate(value){
@@ -919,6 +1093,7 @@
     return `<tr class="${item.id===knowledgeEditingId?'knowledge-row-selected':''}"><td><span class="knowledge-table-main">${safe(item.title)}</span><span class="knowledge-table-sub">${safe(item.content)}</span></td><td>${safe(item.code)}</td><td>${safe(item.scopeType==='tenant'?'公司通用':knowledgeStoreName(item.storeId))}</td><td>${status}</td><td>${safe(knowledgeDate(item.updatedAt))}</td><td>${action}</td></tr>`;
   }
   function renderKnowledgeList(){
+    if(knowledgeTab==='catalog'){window.KefuCatalog.list();return}
     if(!knowledgeLoaded){
       el('knowledge-count').textContent='—';
       el('knowledge-list').innerHTML=`<div class="empty">${knowledgeLoading?'正在从业务后端读取知识库…':'等待读取知识库'}</div>`;
@@ -933,6 +1108,9 @@
     el('knowledge-list').querySelectorAll('[data-knowledge-toggle]').forEach(button=>button.onclick=()=>toggleKnowledgeItem(button.dataset.knowledgeToggle,button));
   }
   function configureKnowledgeForm(){
+    el('knowledge-form').hidden=knowledgeTab==='catalog';
+    el('catalog-editor').hidden=knowledgeTab!=='catalog';
+    if(knowledgeTab==='catalog')return;
     const editable=canWriteKnowledge(),meta=knowledgeMeta[knowledgeTab];
     el('knowledge-product-fields').hidden=knowledgeTab!=='products';
     el('knowledge-faq-fields').hidden=knowledgeTab!=='faqs';
@@ -962,14 +1140,16 @@
     }
     el('knowledge-form-error').textContent='';configureKnowledgeForm();renderKnowledgeList();
   }
-  function resetKnowledgeForm(){fillKnowledgeForm(null)}
+  function resetKnowledgeForm(){if(knowledgeTab==='catalog'){window.KefuCatalog.newSpu();return}fillKnowledgeForm(null)}
   function openKnowledgeItem(id){
     const item=knowledgeItems().find(entry=>String(entry.id)===String(id));
     if(item)fillKnowledgeForm(item);
   }
   async function ensureKnowledgeScope(){
     if(knowledgeScope)return knowledgeScope;
+    const epoch=knowledgeEpoch,session=backendSession;
     const directories=await api.directoryTenants();
+    if(epoch!==knowledgeEpoch||session!==backendSession||!backendConnected)throw new Error('登录状态已变化，请重新进入知识库');
     const accessTenant=backendSession?.access?.tenantId||backendSession?.access?.member?.tenantId;
     const entry=(directories||[]).find(item=>item.tenant.id===accessTenant)||(directories||[]).find(item=>item.tenant.enabled!==false)||(directories||[])[0];
     if(!entry)throw new Error('当前账号没有可访问的公司知识库');
@@ -978,42 +1158,59 @@
     return knowledgeScope;
   }
   async function loadKnowledgeData(force=false){
-    if(knowledgeLoading||knowledgeLoaded&&!force)return;
+    if(!backendConnected||knowledgeLoading||knowledgeLoaded&&!force)return;
+    const epoch=knowledgeEpoch,session=backendSession;
     knowledgeLoading=true;knowledgeLoaded=false;renderKnowledgeList();
     el('knowledge-scope-note').className='knowledge-scope-note';
     el('knowledge-scope-note').textContent='正在从业务后端读取公司知识库…';
     try{
       const scope=await ensureKnowledgeScope();
       const [products,faqs,shortcuts]=await Promise.all([api.knowledgeProducts(scope.tenantId),api.knowledgeFaqs(scope.tenantId),api.knowledgeShortcuts(scope.tenantId)]);
+      if(epoch!==knowledgeEpoch||session!==backendSession||!backendConnected)return;
       knowledgeState.products.splice(0,knowledgeState.products.length,...(products||[]));
       knowledgeState.faqs.splice(0,knowledgeState.faqs.length,...(faqs||[]));
       knowledgeState.shortcuts.splice(0,knowledgeState.shortcuts.length,...(shortcuts||[]));
       knowledgeLoaded=true;
       const permission=canWriteKnowledge()?'管理员可新增、编辑、启停和导入':'客服只读，可查看、搜索和测试';
-      el('knowledge-scope-note').textContent=`${scope.tenantName} · ${scope.stores.length} 个门店 · ${permission}`;
+      if(knowledgeTab!=='catalog')el('knowledge-scope-note').textContent=`${scope.tenantName} · ${scope.stores.length} 个门店 · ${permission}`;
       if(!knowledgeEditingId)resetKnowledgeForm();else renderKnowledgeList();
     }catch(error){
+      if(epoch!==knowledgeEpoch||session!==backendSession||!backendConnected)return;
       el('knowledge-scope-note').className='knowledge-scope-note error';
       el('knowledge-scope-note').textContent=error.message||'知识库读取失败';
       el('knowledge-list').innerHTML='<div class="empty">知识库暂时无法读取，请确认后端与账号范围。</div>';
-    }finally{knowledgeLoading=false;if(knowledgeLoaded)renderKnowledgeList()}
+    }finally{if(epoch===knowledgeEpoch){knowledgeLoading=false;if(knowledgeLoaded)renderKnowledgeList()}}
   }
   function renderKnowledge(){
+    if(!backendConnected){navigate('login');return}
     const editable=canWriteKnowledge(),meta=knowledgeMeta[knowledgeTab];
     el('knowledge-access-badge').textContent=editable?'管理员 · 可维护':'客服 · 只读';
     el('knowledge-access-badge').className=`knowledge-access-badge${editable?'':' readonly'}`;
     el('knowledge-add').hidden=!editable;
+    el('knowledge-add').disabled=false;
+    el('knowledge-form-reset').disabled=false;
     el('knowledge-add').textContent=`＋ ${meta.add}`;
     el('knowledge-import').hidden=!editable||knowledgeTab!=='products';
     el('knowledge-download-template').hidden=!editable||knowledgeTab!=='products';
     el('knowledge-search').placeholder=meta.search;
     document.querySelectorAll('[data-knowledge-tab]').forEach(button=>{const active=button.dataset.knowledgeTab===knowledgeTab;button.classList.toggle('active',active);button.setAttribute('aria-selected',String(active))});
     configureKnowledgeForm();renderKnowledgeList();
+    el('knowledge-test-question').closest('.knowledge-test-panel').hidden=knowledgeTab==='catalog';
+    if(knowledgeTab==='catalog'){
+      const session=backendSession;
+      window.KefuCatalog.render({api,scope:ensureKnowledgeScope,canWrite:canWriteKnowledge,session,active:()=>knowledgeTab==='catalog'&&backendConnected&&backendSession===session,notify:toast});
+      return;
+    }
+    if(knowledgeLoaded&&knowledgeScope){
+      el('knowledge-scope-note').className='knowledge-scope-note';
+      el('knowledge-scope-note').textContent=`${knowledgeScope.tenantName} · ${knowledgeScope.stores.length} 个门店 · ${editable?'管理员可新增、编辑、启停和导入':'客服只读，可查看、搜索和测试'}`;
+    }
     if(backendConnected&&!knowledgeLoaded&&!knowledgeLoading)void loadKnowledgeData();
   }
   async function saveKnowledgeItem(event){
     event.preventDefault();
     if(!canWriteKnowledge())return;
+    const epoch=knowledgeEpoch,session=backendSession,tab=knowledgeTab;
     const current=knowledgeItems().find(item=>item.id===knowledgeEditingId);
     let input;
     if(knowledgeTab==='products')input={sku:el('knowledge-product-sku').value.trim(),title:el('knowledge-product-title').value.trim(),description:el('knowledge-product-description').value.trim()};
@@ -1025,29 +1222,34 @@
     const saveButton=el('knowledge-save');saveButton.disabled=true;saveButton.textContent='正在保存…';
     try{
       const scope=await ensureKnowledgeScope();
-      if(knowledgeTab!=='shortcuts'&&!scope.storeId)throw new Error('公司下没有可用门店，无法保存。');
+      if(epoch!==knowledgeEpoch||session!==backendSession||!canWriteKnowledge())return;
+      if(tab!=='shortcuts'&&!scope.storeId)throw new Error('公司下没有可用门店，无法保存。');
       let saved;
-      if(knowledgeTab==='products')saved=current?await api.updateKnowledgeProduct(scope.tenantId,current.id,input):await api.createKnowledgeProduct(scope.tenantId,{storeId:scope.storeId,...input});
-      else if(knowledgeTab==='faqs')saved=current?await api.updateKnowledgeFaq(scope.tenantId,current.id,input):await api.createKnowledgeFaq(scope.tenantId,{storeId:scope.storeId,...input});
+      if(tab==='products')saved=current?await api.updateKnowledgeProduct(scope.tenantId,current.id,input):await api.createKnowledgeProduct(scope.tenantId,{storeId:scope.storeId,...input});
+      else if(tab==='faqs')saved=current?await api.updateKnowledgeFaq(scope.tenantId,current.id,input):await api.createKnowledgeFaq(scope.tenantId,{storeId:scope.storeId,...input});
       else saved=current?await api.updateKnowledgeShortcut(scope.tenantId,current.id,input):await api.createKnowledgeShortcut(scope.tenantId,{storeId:null,...input});
-      const index=knowledgeItems().findIndex(item=>item.id===saved.id);
-      if(index>=0)knowledgeItems().splice(index,1,saved);else knowledgeItems().unshift(saved);
-      fillKnowledgeForm(saved);
-      toast(`${knowledgeMeta[knowledgeTab].singular}已${current?'更新':'保存'}到业务后端`);
-    }catch(error){el('knowledge-form-error').textContent=[error.message,...(error.details||[])].filter(Boolean).join('；')||'保存失败'}
-    finally{saveButton.disabled=false;configureKnowledgeForm()}
+      if(epoch!==knowledgeEpoch||session!==backendSession||!backendConnected)return;
+      const items=knowledgeState[tab],index=items.findIndex(item=>item.id===saved.id);
+      if(index>=0)items.splice(index,1,saved);else items.unshift(saved);
+      if(tab===knowledgeTab)fillKnowledgeForm(saved);
+      toast(`${knowledgeMeta[tab].singular}已${current?'更新':'保存'}到业务后端`);
+    }catch(error){if(epoch===knowledgeEpoch&&session===backendSession&&tab===knowledgeTab)el('knowledge-form-error').textContent=[error.message,...(error.details||[])].filter(Boolean).join('；')||'保存失败'}
+    finally{if(epoch===knowledgeEpoch){saveButton.disabled=false;configureKnowledgeForm()}}
   }
   async function toggleKnowledgeItem(id,button){
     if(!canWriteKnowledge())return;
+    const epoch=knowledgeEpoch,session=backendSession,tab=knowledgeTab;
     const item=knowledgeItems().find(entry=>String(entry.id)===String(id));
     if(!item)return;
     button.disabled=true;
     try{
       const tenantId=(await ensureKnowledgeScope()).tenantId,patch={enabled:!item.enabled};
-      const updated=knowledgeTab==='products'?await api.updateKnowledgeProduct(tenantId,item.id,patch):knowledgeTab==='faqs'?await api.updateKnowledgeFaq(tenantId,item.id,patch):await api.updateKnowledgeShortcut(tenantId,item.id,patch);
-      const index=knowledgeItems().findIndex(entry=>entry.id===item.id);knowledgeItems().splice(index,1,updated);
-      if(knowledgeEditingId===item.id)fillKnowledgeForm(updated);else renderKnowledgeList();
-      toast(`${knowledgeMeta[knowledgeTab].singular}已${updated.enabled?'启用':'停用'}`);
+      if(epoch!==knowledgeEpoch||session!==backendSession||!canWriteKnowledge())return;
+      const updated=tab==='products'?await api.updateKnowledgeProduct(tenantId,item.id,patch):tab==='faqs'?await api.updateKnowledgeFaq(tenantId,item.id,patch):await api.updateKnowledgeShortcut(tenantId,item.id,patch);
+      if(epoch!==knowledgeEpoch||session!==backendSession||!backendConnected)return;
+      const items=knowledgeState[tab],index=items.findIndex(entry=>entry.id===item.id);items.splice(index,1,updated);
+      if(tab===knowledgeTab){if(knowledgeEditingId===item.id)fillKnowledgeForm(updated);else renderKnowledgeList()}
+      toast(`${knowledgeMeta[tab].singular}已${updated.enabled?'启用':'停用'}`);
     }catch(error){toast(error.message||'状态更新失败')}finally{button.disabled=false}
   }
   function downloadKnowledgeTemplate(){

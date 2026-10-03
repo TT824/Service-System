@@ -3,7 +3,9 @@ const { spawnSync } = require('node:child_process');
 const files = [
   'server.js',
   'src/api-client.js',
+  'src/realtime.js',
   'src/exports.js',
+  'src/catalog.js',
   'src/load-pages.js',
   'src/mock-data.js',
   'src/admin-data.js',

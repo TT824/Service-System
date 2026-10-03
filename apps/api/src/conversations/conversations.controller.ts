@@ -77,6 +77,14 @@ export class ConversationsController {
     return this.conversations.detail(tenantId, member, conversationId);
   }
 
+  /** Live accepting colleagues eligible to receive a handover. */
+  @Get(':conversationId/transfer-targets')
+  async transferTargets(@Req() req: Request, @Param('conversationId') conversationId: string) {
+    const member = this.access.resolveMember(req);
+    const tenantId = await this.access.resolveTenantScope(req, member);
+    return this.conversations.transferTargets(tenantId, conversationId, member);
+  }
+
   /** Every assignment attempt on one conversation, newest first. */
   @Get(':conversationId/assignments')
   async assignments(

@@ -131,6 +131,21 @@ describe('Assignment (interface)', () => {
     return response.status;
   }
 
+  it('offers only live accepting colleagues as transfer targets and enforces read scope', async () => {
+    const path = `/api/v1/conversations/${CLAIMED}/transfer-targets`;
+    await setPresence(AGENT_1, 'accepting');
+    await setPresence(AGENT_2, 'away');
+    let response = await request(app.getHttpServer()).get(path).set('x-member-id', AGENT_1).expect(200);
+    expect(response.body.data).toEqual([]);
+    await setPresence(AGENT_2, 'accepting');
+    response = await request(app.getHttpServer()).get(path).set('x-member-id', AGENT_1).expect(200);
+    expect(response.body.data).toEqual([expect.objectContaining({ memberId: AGENT_2, displayName: expect.any(String) })]);
+    await setPresence(AGENT_2, 'offline');
+    response = await request(app.getHttpServer()).get(path).set('x-member-id', AGENT_1).expect(200);
+    expect(response.body.data).toEqual([]);
+    await request(app.getHttpServer()).get(path).set('x-member-id', 'u-t2-agent-1').expect(404);
+  });
+
   /**
    * Read one conversation's assignment history over HTTP.
    *
