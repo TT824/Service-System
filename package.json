@@ -33,6 +33,8 @@
     "db:status": "npm run status --workspace @kefu/database",
     "db:check": "npm run check --workspace @kefu/database",
     "db:seed": "npm run seed --workspace @kefu/database",
+    "db:seed:demo": "npm run seed:demo --workspace @kefu/database",
+    "db:seed:demo:knowledge": "npm run seed:demo:knowledge --workspace @kefu/database",
     "db:prune": "npm run prune --workspace @kefu/database",
     "compose:check": "node scripts/check-compose.cjs",
     "db:create-account": "npm run create-account --workspace @kefu/database"

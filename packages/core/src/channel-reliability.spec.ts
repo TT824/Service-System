@@ -18,6 +18,7 @@ import {
   DELIVERY_WINDOW_MESSAGE_LIMIT,
   deliveryStatusForFailure,
   deliveryWindowEndsAt,
+  describeReplyWindow,
   evaluateDeliveryWindow,
   isChannelOutboxLeaseActive,
   isDeliveryRetryable,
@@ -125,6 +126,48 @@ describe('channel reliability model', () => {
         '2026-09-10T01:00:00.000Z',
       ),
     ).toMatchObject({ allowed: true });
+  });
+
+  it('describes an open window with its deadline and the slots left', () => {
+    const window = quotaWindow({ reservedCount: 2 });
+    expect(describeReplyWindow(window, '2026-09-10T01:00:00.000Z')).toEqual({
+      open: true,
+      windowStartedAt: window.windowStartedAt,
+      windowEndsAt: window.windowEndsAt,
+      messageLimit: DELIVERY_WINDOW_MESSAGE_LIMIT,
+      remaining: DELIVERY_WINDOW_MESSAGE_LIMIT - 2,
+      refusal: null,
+    });
+  });
+
+  it('keeps the deadline readable after the window stops accepting replies', () => {
+    const window = quotaWindow();
+    // 过期与用尽都读作「不能发」，但截止时间仍在，坐席看得到客户上一次是什么时候写的。
+    expect(describeReplyWindow(window, '2026-09-12T00:00:00.000Z')).toMatchObject({
+      open: false,
+      windowEndsAt: window.windowEndsAt,
+      remaining: 0,
+      refusal: 'window_expired',
+    });
+    expect(
+      describeReplyWindow(
+        quotaWindow({ reservedCount: DELIVERY_WINDOW_MESSAGE_LIMIT }),
+        '2026-09-10T01:00:00.000Z',
+      ),
+    ).toMatchObject({ open: false, remaining: 0, refusal: 'quota_exceeded' });
+  });
+
+  it('projects the window a customer who has not written yet will open', () => {
+    // 没有窗口不是故障，是一句「客户还没开口」：界面据此说明等待什么，而不是显示一条
+    // 已失效的截止时间。
+    expect(describeReplyWindow(undefined, '2026-09-10T01:00:00.000Z')).toEqual({
+      open: false,
+      windowStartedAt: null,
+      windowEndsAt: null,
+      messageLimit: DELIVERY_WINDOW_MESSAGE_LIMIT,
+      remaining: 0,
+      refusal: 'window_missing',
+    });
   });
 
   it('distinguishes a definite failure from a lost provider response', () => {

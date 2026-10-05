@@ -18,6 +18,7 @@ import {
   mayTakeOverClaim,
   screenContent,
   transferTargetRefusal,
+  type AgentAvailabilityStatus,
   type AssignmentCandidate,
   type AssignmentReasonCode,
   type ContentSafetyRule,
@@ -27,6 +28,7 @@ import {
   type Member,
   type Message,
   type MessageSource,
+  type ReplyWindowStatus,
   type StoreConversationResult,
   type TakeoverAuthority,
 } from '@kefu/core';
@@ -77,6 +79,22 @@ export type ConversationDetail = {
    * ({@link maySendToConversation}) rather than a second reading of who may type.
    */
   readonly canReply: boolean;
+  /**
+   * The customer's 48-hour reply window and how much of its five-reply budget is
+   * left, as the workspace's 外发提醒 banner shows it.
+   *
+   * Server-side rather than counted in the console, because the console cannot
+   * see the window at all — it is opened by the customer's inbound message, and
+   * only the platform sees those. The prototype kept a hardcoded date and a
+   * counter it decremented locally, which drifted from the rule the send path
+   * enforces the moment either side moved. The numbers come from the same kernel
+   * function the worker refuses sends with ({@link ReplyWindowStatus}), so the
+   * banner cannot promise a reply the platform will refuse.
+   *
+   * It is deliberately *not* a duplicate of {@link canReply}: that one answers
+   * who may type, this one answers whether the customer can still be reached.
+   */
+  readonly replyWindow: ReplyWindowStatus;
   /**
    * Where this reader's transcript of the conversation stops, or `null` for the
    * whole thing.
@@ -144,6 +162,23 @@ export type ConversationPoolEntry = {
    * rather than a per-seat delivery list.
    */
   readonly audienceMemberIds: ReadonlyArray<string>;
+};
+
+/**
+ * One seat a conversation may be handed to, as the 转交 picker shows it.
+ *
+ * `availability` is the dispatcher's own word for the seat (`accepting`,
+ * `suspended`, absent-as-offline), and `inProgressCount` is how much the seat is
+ * already carrying. Both travel with the row so an operator choosing a handover
+ * target can see why a colleague they expected is not on the list, instead of
+ * reading an empty picker.
+ */
+export type TransferTarget = {
+  readonly memberId: string;
+  readonly displayName: string;
+  readonly storeId: string | null;
+  readonly availability: AgentAvailabilityStatus;
+  readonly inProgressCount: number;
 };
 
 /**
@@ -219,6 +254,7 @@ export class ConversationsService {
       deliveries,
       mediaUrls: this.#mediaUrlsFor(tenantId, messages),
       canReply: maySendToConversation({ conversation, memberId: member.id }),
+      replyWindow: await this.delivery.replyWindow(conversation),
       historyUntil: access.kind === 'full' ? null : access.until,
       canTakeOver,
       canTakeOverSelf: canTakeOver && (await this.mayReceiveHandover(tenantId, member)),
@@ -394,21 +430,6 @@ export class ConversationsService {
     return this.repository.listAssignments(tenantId, conversationId);
   }
 
-  /** Use the transfer route's eligibility rule, including heartbeat expiry. */
-  async transferTargets(tenantId: string, conversationId: string, member: Member) {
-    const { conversation } = await this.requireReadable(tenantId, conversationId, member);
-    const candidates = await this.repository.listAssignmentCandidates(tenantId, undefined);
-    const directory = await this.identity.getDirectoryEntry(member, tenantId);
-    return candidates
-      .filter((target) => target.memberId !== conversation.assignedMemberId &&
-        this.transferRefusal(candidates, target.memberId, undefined) === undefined)
-      .map((target) => ({
-        memberId: target.memberId,
-        displayName: directory.members.find((person) => person.id === target.memberId)?.displayName ?? target.memberId,
-        storeId: target.storeId,
-        inProgressCount: target.inProgressCount,
-      }));
-  }
 
   async claim(
     tenantId: string,
@@ -453,6 +474,57 @@ export class ConversationsService {
       this.throwFor(result);
     }
     return this.announceTransition(result.conversation);
+  }
+
+  /**
+   * The seats this conversation may be handed to right now.
+   *
+   * The same rule {@link transfer} enforces, asked for the whole roster instead
+   * of one seat at a time: the console cannot read the presence table, so without
+   * this list a 转交 control could only offer names the route then refuses — and
+   * the refusal reaches the caller as a plain 409, because the error filter
+   * flattens the reason code to the status text. Returning the eligible set is
+   * what keeps the offered targets and the accepted ones the same set.
+   *
+   * The acting member is excluded: handing a conversation to whoever already
+   * holds it is not a transfer, and the rule has no reason to refuse it.
+   *
+   * The read goes through {@link requireConversation}, the same gate the transfer
+   * route uses, so a caller who may not transfer cannot enumerate the roster
+   * either. Names come from the tenant directory, which the same member may
+   * already read in the account center, and a seat missing from it falls back to
+   * its member id rather than to a blank row.
+   *
+   * @param tenantId - Effective tenant scope.
+   * @param conversationId - Conversation being handed over.
+   * @param member - The resolved acting member.
+   * @returns Eligible seats in the dispatcher's own order, each with the
+   * availability it was judged by.
+   */
+  async transferTargets(
+    tenantId: string,
+    conversationId: string,
+    member: Member,
+  ): Promise<ReadonlyArray<TransferTarget>> {
+    await this.requireConversation(tenantId, conversationId, member);
+    const candidates = await this.repository.listAssignmentCandidates(tenantId, undefined);
+    const now = new Date().toISOString();
+    const directory = await this.identity.getDirectoryEntry(member, tenantId);
+    const names = new Map(directory.members.map((entry) => [entry.id, entry.displayName]));
+    return candidates
+      .filter((candidate) => candidate.memberId !== member.id)
+      .filter(
+        (candidate) =>
+          transferTargetRefusal({ target: candidate, conversationStoreId: undefined, now }) ===
+          undefined,
+      )
+      .map((candidate) => ({
+        memberId: candidate.memberId,
+        displayName: names.get(candidate.memberId) ?? candidate.memberId,
+        storeId: candidate.storeId,
+        availability: candidate.status,
+        inProgressCount: candidate.inProgressCount,
+      }));
   }
 
   async transfer(

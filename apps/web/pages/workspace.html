@@ -108,13 +108,18 @@
         <strong>
           外发提醒
         </strong>
-        当前会话处于 48 小时回复窗口，剩余
-        <b id="budget">
-          3
-        </b>
-        条外发额度；请尽量合并回复。
+        <!-- 接入后端后由 renderReplyWindow() 按服务端返回的 replyWindow 重写
+             #notice-reply-window 与 #notice-window-deadline；下面的默认文案只在
+             原型（未连后端）模式下出现。 -->
+        <span id="notice-reply-window">
+          当前会话处于 48 小时回复窗口，剩余
+          <b id="budget">
+            3
+          </b>
+          条外发额度；请尽量合并回复。
+        </span>
       </span>
-      <span>
+      <span id="notice-window-deadline">
         窗口至 09月24日 09:40
       </span>
     </div>
@@ -162,7 +167,7 @@
       </div>
     </div>
   </main>
-  <!-- 内部群聊与客服外发会话分开：没有微信客服外发额度或 AI 候选。 -->
+  <!-- 内部协作（同事一对一/群聊）与客服外发会话分开：没有微信客服外发额度或 AI 候选。 -->
   <main id="group-chat-view" class="chat" hidden>
     <div class="chat-header">
       <div>
@@ -171,10 +176,10 @@
       </div>
       <span class="pill blue">内部协作 · 演示</span>
     </div>
-    <div class="group-chat-note">此处是团队内部群聊演示，消息不会发送到微信客服客户。</div>
+    <div class="group-chat-note" id="group-chat-note">此处是团队内部群聊演示，消息不会发送到微信客服客户。</div>
     <div class="messages" id="group-chat-messages" aria-live="polite"></div>
     <div class="composer">
-      <div class="composer-toolbar"><strong class="group-composer-label">发送到内部群聊</strong><span class="pill green">仅本地演示</span></div>
+      <div class="composer-toolbar"><strong class="group-composer-label" id="group-composer-label">发送到内部群聊</strong><span class="pill green">仅本地演示</span></div>
       <textarea id="group-chat-reply" placeholder="输入群消息…"></textarea>
       <div class="composer-foot"><span class="hint">Enter 发送 · Shift+Enter 换行</span><button class="btn primary" id="group-chat-send" type="button">发送群消息 ↗</button></div>
     </div>
@@ -292,11 +297,11 @@
     </div>
   </aside>
   <aside id="group-chat-aside" class="assist" hidden>
-    <div class="assist-header"><span class="assist-title">群聊信息</span><span class="pill blue">内部群</span></div>
+    <div class="assist-header"><span class="assist-title" id="group-chat-aside-title">群聊信息</span><span class="pill blue">内部群</span></div>
     <div class="assist-section">
-      <div class="assist-label">群成员 <span id="group-chat-member-count" class="assist-sub"></span></div>
+      <div class="assist-label"><span id="group-chat-member-label">群成员</span> <span id="group-chat-member-count" class="assist-sub"></span></div>
       <div id="group-chat-members"></div>
     </div>
-    <div class="assist-section"><p class="group-aside-note">群聊、成员和消息目前保存在本次页面会话中。正式接入时需要服务端提供群权限、消息历史与实时通知。</p></div>
+    <div class="assist-section"><p class="group-aside-note" id="group-chat-aside-note">群聊、成员和消息目前保存在本次页面会话中。正式接入时需要服务端提供群权限、消息历史与实时通知。</p></div>
   </aside>
 </section>

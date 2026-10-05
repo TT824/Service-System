@@ -6,6 +6,7 @@ import {
   CUSTOMER_VISIBLE_SKU_FACTS,
   CUSTOMER_VISIBLE_SPU_ATTRIBUTES,
   clampSuggestionLimit,
+  classifyIntent,
   constrainRecallByAttribute,
   fuseRecall,
   generateSuggestions,
@@ -65,6 +66,27 @@ type StoreKnowledge = {
   readonly entries: ReadonlyArray<RetrievableKnowledge>;
   readonly semanticUnavailable: boolean;
 };
+
+/**
+ * Whether one entry is a 话术库 hit: a leg recalled it, and it is a shortcut or a
+ * FAQ.
+ *
+ * Two conditions, and the first is the load-bearing one. `recall` is present only
+ * on entries the fused recall produced, so a row read straight out of the legacy
+ * `products` table — the one half of the answer that bypasses the index — can
+ * never be read as a matched phrase however its words line up with the question.
+ * That is what lets the retrieval-first rule be stated without a score threshold:
+ * "a leg recalled it" is evidence of a match, and `kind` says what was matched.
+ *
+ * The predicate narrows rather than returning a boolean so the caller may read
+ * `recall` without a second check — the rank is carried onto the candidate as its
+ * 检索依据.
+ */
+function isScriptHit(
+  entry: RetrievableKnowledge,
+): entry is RetrievableKnowledge & { readonly recall: NonNullable<RetrievableKnowledge['recall']> } {
+  return entry.recall !== undefined && entry.kind !== 'product';
+}
 
 /**
  * Retrieval and suggestion behavior.
@@ -155,6 +177,27 @@ export class RetrievalService {
       input.query === undefined
         ? await this.latestInboundText(tenantId, conversation.id)
         : input.query;
+    const intent = classifyIntent(query);
+
+    // A greeting is not searched for. The two recall legs, the fusion, the
+    // reranker and the model are the cost of answering a question, and a message
+    // that asks nothing has no question to answer — spending them would bill the
+    // tenant for a retrieval nobody needs. The empty set is still written and
+    // labelled, so the panel can say *why* it is empty instead of showing a bare
+    // list of nothing: see `chitchat_no_retrieval`.
+    if (intent === 'chitchat') {
+      return this.persistSet({
+        tenantId,
+        storeId: conversation.storeId,
+        conversationId: conversation.id,
+        provider: 'none',
+        intent,
+        origin: 'none',
+        candidates: [],
+        fallbackReasons: [SUGGESTION_FALLBACK_REASONS.chitchatNoRetrieval],
+      });
+    }
+
     const knowledge = await this.knowledgeForStore(tenantId, conversation.storeId, query);
 
     // The engine runs first and unconditionally: it is pure, it is instant, and
@@ -169,6 +212,54 @@ export class RetrievalService {
       ...(input.limit === undefined ? {} : { limit: input.limit }),
     });
 
+    // 话术库 first: when the store has written a phrase for this question, the
+    // seat gets that phrase rather than a model's rewrite of it. The hit test is
+    // recall evidence and not a score threshold — see {@link isScriptHit}, which
+    // is also where a product is ruled out of ever passing it.
+    const scripts = knowledge.entries.filter(isScriptHit);
+    if (scripts.length > 0) {
+      const scores = new Map(
+        engine.candidates.map((candidate) => [
+          `${candidate.kind}:${candidate.sourceId}`,
+          candidate.score,
+        ]),
+      );
+      return this.persistSet({
+        tenantId,
+        storeId: conversation.storeId,
+        conversationId: conversation.id,
+        provider: 'none',
+        intent,
+        origin: 'script',
+        // Recalled order, not the engine's lexical order: the question here is
+        // "which phrase fits best", and BM25 + vector + rerank is what answers
+        // it. The engine's own score is carried as evidence, not as the ranking.
+        candidates: scripts.slice(0, clampSuggestionLimit(input.limit)).map((entry, index) =>
+          Object.freeze({
+            rank: index + 1,
+            kind: entry.kind,
+            sourceId: entry.id,
+            tenantId: entry.tenantId,
+            storeId: entry.storeId,
+            title: entry.title,
+            content: entry.content,
+            score: scores.get(`${entry.kind}:${entry.id}`) ?? 0,
+            recall: entry.recall,
+          } satisfies SuggestionCandidate),
+        ),
+        // The same allow-list as the generated branch, for a stronger reason:
+        // `no_generation_provider` would be false here. Generation was not
+        // missing — it was not wanted.
+        fallbackReasons: engine.fallbackReasons.filter(
+          (reason) => reason === SUGGESTION_FALLBACK_REASONS.semanticRecallUnavailable,
+        ),
+      });
+    }
+
+    // Everything reachable here is the 商品库: a recalled shortcut or FAQ would
+    // have been answered by the block above, so what is left is the products —
+    // which is what "generate from the product's own information" means. No
+    // second filter is needed to say so, and a second filter is what would drift.
     const drafts = await this.draft(tenantId, query, knowledge.entries, input.limit);
     if (drafts !== undefined) {
       return this.persistSet({
@@ -176,6 +267,8 @@ export class RetrievalService {
         storeId: conversation.storeId,
         conversationId: conversation.id,
         provider: 'deepseek',
+        intent,
+        origin: 'generated',
         candidates: drafts,
         // Only the reasons that are about the search itself survive, and they
         // are named one by one rather than filtered against: the engine's other
@@ -204,6 +297,10 @@ export class RetrievalService {
       storeId: conversation.storeId,
       conversationId: conversation.id,
       provider: 'none',
+      intent,
+      // Candidates mean the 商品库 answered, ordered by the engine's own lexical
+      // score; none means nothing did.
+      origin: engine.candidates.length === 0 ? 'none' : 'catalogue',
       candidates: engine.candidates,
       fallbackReasons,
     });

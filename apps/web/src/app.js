@@ -18,15 +18,28 @@
   let knowledgeScope=null,knowledgeEpoch=0;
   const knowledgeState={products:[],faqs:[],shortcuts:[]};
   let phraseMatches=[], phraseIndex=0, phraseRange=null, replyComposing=false;
+  // 登录方式与密码显隐：navigate() 在初始化早期就会走到登录页，所以这两个状态和其他
+  // 顶层状态放在一起声明，避免被后面的 let 声明挡住（TDZ）。
+  let authMode='password',secretRevealed=false;
   const groupChats = JSON.parse(JSON.stringify(window.CustomerServiceMock.groupChats));
+  // 同事一对一内部会话：按联系人 id 归类，和客户会话、群聊分开保存，避免误发。
+  const directThreads=new Map(Object.entries(JSON.parse(JSON.stringify(window.CustomerServiceMock.directThreads||{}))));
   let currentId=1, selectedSuggestion=-1, originalSuggestion='', modalAction=null, currentSuggestions=suggestions, assistEnabled=true, presenceState='online';
-  let contactCategory='team', activeGroupChatId=null;
+  // 真实会话的候选来自服务端一次算完的 set（POST /retrieval/suggestions）。这几个变量只记
+  // 「哪个会话的、哪一次请求的」结果，候选本身不在这里拼：意图、检索和降级原因都是服务端的
+  // 事实，浏览器复刻一遍就会两边漂移。
+  let contactCategory='team', activeGroupChatId=null, activeDirectId=null;
   let conversationStatus='active';
   const profile={name:'陈小雨',phoneRaw:'13800002068',phoneMasked:'138****2068',avatarUrl:''};
   let backendSession=null,backendConnected=false,heartbeatTimer=null;
   let stopRealtime=null,refreshTimer=null,deliveryTimer=null,refreshRunning=false,refreshAgain=false,workspaceEpoch=0,workspaceStoreId='';
   let selectedCandidateId=null,selectedCandidateConversation=null;
   const remoteSuggestions=new Map();
+  // 登录后服务端下发的本人成员 ID：用于判断某条会话是不是自己在接待（能转移的对象），
+  // 与角色无关，也不参与鉴权，只决定按钮显不显示。
+  let selfMemberId=null;
+  // 首帧的默认路由由初始化流程自己走完，不弹“请先登录”提示；此后才算用户操作。
+  let booted=false;
   let profileAvatarObjectUrl='';
   const expandedContactGroups=new Set(['team:售前客服','buyers:重点客户']);
   const el=id=>document.getElementById(id);
@@ -43,6 +56,64 @@
     const date=new Date(value);
     if(Number.isNaN(date.valueOf()))return '';
     return date.toLocaleTimeString('zh-CN',{hour:'2-digit',minute:'2-digit',hour12:false});
+  }
+  function formatWindowDeadline(value){
+    const date=new Date(value);
+    if(Number.isNaN(date.valueOf()))return '';
+    const pad=number=>String(number).padStart(2,'0');
+    return `${pad(date.getMonth()+1)}月${pad(date.getDate())}日 ${pad(date.getHours())}:${pad(date.getMinutes())}`;
+  }
+  // 外发提醒的四句话都读服务端 GET /conversations/:id 的 replyWindow：窗口何时开、何时关、
+  // 还剩几条额度是平台的事实（客户入向消息开窗、窗口内最多 5 条），浏览器从前看不到，
+  // 所以这一块曾经写死。这里只做两件事——把服务端给的数字填进句子，以及页面停留很久、
+  // 截止时间已经过去时改口说「已关闭」：后者是对服务端给出的绝对截止时间的一次读法
+  // （同一个半开区间），能发与否仍然由服务端在提交时判定，前端不自己下结论。
+  function replyWindowView(replyWindow){
+    if(!replyWindow)return null;
+    const deadline=replyWindow.windowEndsAt?formatWindowDeadline(replyWindow.windowEndsAt):'';
+    const limit=replyWindow.messageLimit;
+    const expired=replyWindow.windowEndsAt!==null&&Date.now()>=Date.parse(replyWindow.windowEndsAt);
+    if(replyWindow.open&&!expired){
+      return {
+        open:true,
+        html:`当前会话处于 48 小时回复窗口，剩余<b id="budget">${replyWindow.remaining}</b>条外发额度（本窗口共 ${limit} 条）；请尽量合并回复。`,
+        deadline:deadline?`窗口至 ${deadline}`:'',
+      };
+    }
+    if(replyWindow.refusal==='window_missing'){
+      return {open:false,html:'客户尚未发来消息，48 小时回复窗口未开启。',deadline:'尚无回复窗口',toast:'客户尚未发来消息，回复窗口未开启'};
+    }
+    if(replyWindow.refusal==='quota_exceeded'){
+      return {
+        open:false,
+        html:`本窗口的 ${limit} 条外发额度已用完，客户再次发来消息后重置。`,
+        deadline:deadline?`窗口至 ${deadline}`:'',
+        toast:'本窗口外发额度已用完，等待客户再次发来消息',
+      };
+    }
+    return {
+      open:false,
+      html:`48 小时回复窗口已关闭${deadline?`（${deadline} 截止）`:''}，客户再次发来消息后可继续回复。`,
+      deadline:'窗口已关闭',
+      toast:'回复窗口已关闭，客户再次发来消息后可继续回复',
+    };
+  }
+  // 未连后端（原型模式）时保留 pages/workspace.html 里的默认文案：那种模式下没有服务端窗口
+  // 可读，界面显示什么由原型自己决定。默认值在第一次改写之前抓取，之后不再变。
+  let noticeDefaults=null;
+  function renderReplyWindow(c){
+    if(noticeDefaults===null){
+      noticeDefaults={sentence:el('notice-reply-window').innerHTML,deadline:el('notice-window-deadline').textContent};
+    }
+    const view=c&&c.replyWindow?replyWindowView(c.replyWindow):null;
+    if(!view){
+      el('notice-reply-window').innerHTML=noticeDefaults.sentence;
+      el('notice-window-deadline').textContent=noticeDefaults.deadline;
+      return null;
+    }
+    el('notice-reply-window').innerHTML=view.html;
+    el('notice-window-deadline').textContent=view.deadline;
+    return view;
   }
   // 单公司部署中，后端 platform_admin 与 merchant_admin 都是前端的公司管理员。
   // 前端不再把 platform_admin 降到只可见租户/审核页的“超级管理员”壳层。
@@ -65,6 +136,7 @@
       endedAt:row.closedAt?new Date(row.closedAt).valueOf():null,
       messages:previous?.messages||[],
       canReply:previous?.canReply,
+      replyWindow:previous?.replyWindow,
     };
   }
   function backendMessageOf(message){
@@ -94,6 +166,9 @@
       const message=mapped.messages.find(row=>row.id===item.delivery.messageId);
       if(message)message.deliveryStatus=item.delivery.status;
     }
+    // 服务端算好的回复窗口（截止时间 + 剩余额度）。列表接口不带它，只有详情有，
+    // 所以这里跟着详情一起落到会话上，renderMessages 直接渲染。
+    mapped.replyWindow=detail.replyWindow;
     conversations[index]=mapped;
     if(String(currentId)===String(id))renderAll();
   }
@@ -165,6 +240,9 @@
     const access=session.access||{};
     const account=session.account||{};
     profile.name=access.member?.displayName||account.display_name||account.username||'当前用户';
+    // 会话列表用不了 access.member.id 之外的信息；会话详情里的 canTakeOver 只有在
+    // 拿到本人 ID 时才有意义。
+    selfMemberId=access.member?.id??session.session?.memberId??null;
     profile.phoneRaw=account.phone||'';
     profile.phoneMasked=account.phone?`${account.phone.slice(0,3)}****${account.phone.slice(-4)}`:'未绑定';
     profile.avatarUrl=account.avatar_url||'';
@@ -173,6 +251,8 @@
     el('role-select').disabled=false;
     el('role-select').value=mappedRole;
     el('role-select').onchange();
+    // 会话建立后才放出导航入口；角色选择仍锁定为后端下发的角色。
+    applyAccessLock();
     el('role-select').disabled=true;
     const storeId=access.storeId||access.authorizedStoreIds?.[0];
     if(storeId)el('store-select').innerHTML=`<option>${safe(storeId)}</option>`;
@@ -196,6 +276,7 @@
         setBackendStatus('业务后端尚未就绪','error');
         setAuthStatus(error.message||'无法连接业务后端','error');
       }
+      applyAccessLock();
       navigate('login');
       return;
     }
@@ -220,6 +301,7 @@
       clearBackendSession();
       setBackendStatus('业务后端连接失败','error');
       setAuthStatus(error.message||'无法恢复登录，请重新登录','error');
+      applyAccessLock();
       navigate('login');
     }
   }
@@ -229,16 +311,37 @@
   el('modal-bg').addEventListener('click',e=>{if(e.target===el('modal-bg'))closeModal()});
   el('modal-confirm').onclick=()=>{if(modalAction&&modalAction()===false)return;closeModal()};
   function role(){return el('role-select').value;}
+  // 目录维护（改分组、建分组、建群）是管理动作：客服只读，但任何角色都可以
+  // 和同事发起一对一内部协作会话。正式鉴权仍需服务端再校验一次。
+  function canManageContacts(){return role()!=='agent';}
   function safe(value){return String(value).replace(/[&<>"']/g,ch=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]));}
+  // 未登录时侧边导航、演示角色切换和账号卡片都不再提供入口，避免用界面按钮
+  // 跳过登录。演示角色只决定页面可见性，不是授权来源；真正的读写仍由后端按
+  // Bearer 会话校验。
+  function sessionEstablished(){return Boolean(backendConnected)&&Boolean(api?.hasSession());}
+  function applyAccessLock(){
+    const locked=!sessionEstablished();
+    if(locked)document.querySelectorAll('.nav-item').forEach(x=>{x.style.display='none'});
+    el('role-select').disabled=locked;
+    el('profile-btn').disabled=locked;
+  }
   function navigate(view){
+    // 登录门禁：离开登录页必须先有真实后端会话，任何入口都走这里收口。
+    if(view!=='login'&&!sessionEstablished()){if(booted)toast('请先登录再访问控制台页面');view='login';}
+    // 记下这次导航是不是「本来就在登录页」：只有真正切回登录页才需要复位密码显隐。
+    // 初始化时 bootstrapBackend 的健康检查、以及被门禁挡回来的点击都会再次调用
+    // navigate('login')，若无条件复位，会把用户刚点的「显示密码」在几百毫秒后悄悄收回，
+    // 表现就是按钮时灵时不灵。
+    const wasOnLogin=el('login').classList.contains('active');
     // 退出后，演示下拉框和旧 DOM 不能继续代表真实账号权限。
-    if(!backendConnected&&!['login','account'].includes(view))view='login';
     window.ExportPortal?.leave();
     if(view==='exports')window.ExportPortal?.open();
     const restricted={workspace:['agent','merchant'],admin:['agent','merchant'],review:['platform','super'],tenants:['super'],products:['merchant'],knowledge:['agent','merchant'],phrases:['agent','merchant'],analytics:['merchant'],settings:['merchant']};
     if(restricted[view]&&!restricted[view].includes(role())){toast('当前演示角色无权访问此页面');return;}
     document.querySelectorAll('.nav-item').forEach(x=>x.classList.toggle('active',x.dataset.view===view));
     el('workspace').classList.toggle('active',view==='workspace'); document.querySelectorAll('.page').forEach(x=>x.classList.toggle('active',x.id===view));
+    // 切回登录页时把密码收回明文并清空按钮状态：上一次会话留下的“已显示”不该带到下一次登录。
+    if(view==='login'&&!wasOnLogin){secretRevealed=false;syncSecretField()}
     el('account-role').textContent=el('role-select').selectedOptions[0].textContent;
     if(view==='admin')window.AdminPortal?.open();
     if(view==='phrases')renderPhrasePage();
@@ -251,6 +354,10 @@
   });
   el('role-select').onchange=()=>{const r=role(); document.querySelectorAll('.nav-item').forEach(x=>{const v=x.dataset.view; x.style.display=r==='unauth'||(r==='agent'&&!['workspace','admin','knowledge','phrases','exports'].includes(v))||(r==='platform'&&v!=='review')||(r==='merchant'&&['review','tenants'].includes(v))||(r==='super'&&!['review','tenants'].includes(v))?'none':''}); closeProfileMenu();renderProfile();navigate(r==='platform'?'review':r==='super'?'tenants':r==='unauth'?'login':'workspace');};
   el('role-select').onchange();
+  // 初始化完成时还没有后端会话，先锁住界面入口；登录成功后由
+  // applyBackendSession 解锁。
+  applyAccessLock();
+  booted=true;
   el('role-select').addEventListener('change',()=>{closeModal();window.AdminPortal?.refreshAccess()});
   function profileInitial(){return [...profile.name.trim()][0]||'客';}
   function renderProfile(){
@@ -307,7 +414,9 @@
     // 启动撤销请求时已经捕获令牌，界面立即清空，不等待网络响应。
     const revoke=backendConnected?api.logout():Promise.resolve();
     el('auth-submit').disabled=true;
+    // clearBackendSession 会停掉心跳与实时订阅、清掉密码框、并收回访问锁。
     clearBackendSession();
+    applyAccessLock();
     setBackendStatus('已退出 · 请重新登录');
     setAuthStatus('已退出当前账号');
     navigate('login');
@@ -359,7 +468,26 @@
   el('back-account').onclick=()=>navigate('account');
   document.addEventListener('click',event=>{if(!el('profile-btn').contains(event.target)&&!el('profile-menu').contains(event.target))closeProfileMenu()});
   renderProfile();
-  document.querySelectorAll('[data-auth]').forEach(x=>x.onclick=()=>{document.querySelectorAll('[data-auth]').forEach(t=>t.classList.toggle('active',t===x));const type=x.dataset.auth;el('auth-title').textContent=type==='register'?'创建账号':'欢迎回来';el('auth-secret').type=type==='password'?'password':'text';el('auth-secret').placeholder=type==='password'?'密码':type==='sms'?'短信验证码':'设置密码';el('auth-submit').textContent=type==='register'?'注册并进入账号中心':'登录';});
+  // 登录方式决定密码框是不是真的在收密码：登录与注册都是密码，验证码是明文。
+  // 显隐按钮常驻，真正需要隐藏它的只有「这个字段不是密码」这一种情况。
+  function syncSecretField(){
+    const field=el('auth-secret'),reveal=el('auth-secret-toggle');
+    // 登录与注册收的都是密码，只有验证码是明文 —— 那一种情况才没有可显示的内容。
+    const revealable=authMode!=='sms';
+    field.type=revealable&&!secretRevealed?'password':'text';
+    reveal.hidden=!revealable;
+    const pressed=revealable&&secretRevealed;
+    reveal.setAttribute('aria-pressed',String(pressed));
+    const label=pressed?'隐藏密码':'显示密码';
+    reveal.setAttribute('aria-label',label);
+    reveal.title=label;
+  }
+  el('auth-secret-toggle').onclick=()=>{secretRevealed=!secretRevealed;syncSecretField();el('auth-secret').focus()};
+  document.querySelectorAll('[data-auth]').forEach(x=>x.onclick=()=>{document.querySelectorAll('[data-auth]').forEach(t=>t.classList.toggle('active',t===x));authMode=x.dataset.auth;el('auth-title').textContent=authMode==='register'?'创建账号':'欢迎回来';el('auth-secret').placeholder=authMode==='password'?'密码':authMode==='sms'?'短信验证码':'设置密码';el('auth-submit').textContent=authMode==='register'?'注册并进入账号中心':'登录';
+    // 切换登录方式时收回明文并复位按钮，避免“看着像密码框、其实没遮住”。
+    secretRevealed=false;syncSecretField();
+  });
+  syncSecretField();
   el('auth-submit').onclick=async()=>{
     const type=document.querySelector('[data-auth].active')?.dataset.auth;
     if(type!=='password'){setAuthStatus('首轮整合先开放账号密码登录，验证码和注册将在后续接入。','error');return}
@@ -399,15 +527,29 @@
     el('group-chat-view').hidden=true;
     el('group-chat-aside').hidden=true;
   }
-  function showGroupChat(id){
-    activeGroupChatId=id;
+  // 群聊和同事一对一复用同一块“内部协作”界面：两者都不经过微信客服外发
+  // 通道，放在一起可以避免和客户会话混淆。
+  function openInternalChat(){
     el('customer-chat-view').hidden=true;
     el('customer-assist').hidden=true;
     el('group-chat-view').hidden=false;
     el('group-chat-aside').hidden=false;
-    renderGroupChat();
+    renderInternalChat();
     renderContacts();
   }
+  function showGroupChat(id){
+    activeGroupChatId=id;
+    activeDirectId=null;
+    openInternalChat();
+  }
+  function showDirectChat(personId){
+    const person=contacts.team.find(item=>item.id===personId);
+    if(!person)return;
+    activeDirectId=personId;
+    activeGroupChatId=null;
+    openInternalChat();
+  }
+  function activeContact(){return contacts.team.find(item=>item.id===activeDirectId)||null;}
   function setQueueMode(mode){
     const showContacts=mode==='contacts';
     el('conversation-panel').hidden=showContacts;
@@ -422,6 +564,7 @@
     });
     if(showContacts){
       if(contactCategory==='groupChats'&&activeGroupChatId)showGroupChat(activeGroupChatId);
+      else if(contactCategory==='team'&&activeDirectId)showDirectChat(activeDirectId);
       else renderContacts();
     }else{
       if(activeConversation()?.status!==conversationStatus)currentId=conversations.find(c=>c.status===conversationStatus)?.id??null;
@@ -429,18 +572,55 @@
       renderAll();
     }
   }
-  // TODO(API): Internal groups require tenant-scoped membership, history and
-  // real-time events. They must never use the external customer send endpoint.
-  function renderGroupChat(){
-    const group=groupChats.find(item=>item.id===activeGroupChatId);
-    if(!group)return;
-    el('group-chat-title').textContent=group.name;
-    el('group-chat-subtitle').textContent=`${group.detail} · ${group.members.length} 位成员`;
-    el('group-chat-member-count').textContent=`${group.members.length} 人`;
-    el('group-chat-members').innerHTML=group.members.map(name=>`<div class="group-member"><span class="avatar">${safe(name.slice(0,1))}</span><span><strong>${safe(name)}</strong><small>${name==='陈小雨'?'我 · 客服':'团队成员'}</small></span></div>`).join('');
-    el('group-chat-messages').innerHTML='<div class="day">今天 · 内部协作</div>'+(group.messages.length?group.messages.map(message=>`<div class="message ${message.sender==='陈小雨'?'agent':''}"><div class="avatar">${safe(message.sender.slice(0,1))}</div><div class="message-content"><div class="message-meta">${safe(message.sender)} · ${safe(message.time)}</div><div class="bubble"></div></div></div>`).join(''):'<div class="empty">群聊已创建，发送第一条消息开始协作。</div>');
-    el('group-chat-messages').querySelectorAll('.bubble').forEach((bubble,index)=>bubble.textContent=group.messages[index].text);
+  // TODO(API): Internal groups and colleague 1:1 threads both require
+  // tenant-scoped membership, history and real-time events. Neither may reuse
+  // the external customer send endpoint.
+  function renderInternalChat(){
+    const person=activeContact();
+    const group=person?null:groupChats.find(item=>item.id===activeGroupChatId);
+    if(!person&&!group)return;
+    const messages=person?(directThreads.get(person.id)||[]):group.messages;
+    if(person){
+      el('group-chat-title').textContent=person.name;
+      el('group-chat-subtitle').textContent=`${person.detail} · 一对一内部会话`;
+      el('group-chat-member-count').textContent='2 人';
+      el('group-chat-members').innerHTML=[{name:'陈小雨',detail:'我 · 客服'},{name:person.name,detail:person.group}].map(member=>`<div class="group-member"><span class="avatar">${safe(member.name.slice(0,1))}</span><span><strong>${safe(member.name)}</strong><small>${safe(member.detail)}</small></span></div>`).join('');
+      el('group-chat-note').textContent='此处是与同事的一对一内部沟通演示，消息不会发送到微信客服客户。';
+      el('group-chat-aside-title').textContent='会话信息';
+      el('group-chat-member-label').textContent='会话成员';
+      el('group-chat-aside-note').textContent='一对一内部会话属于界面原型：消息只保存在本次页面会话中，正式版本需要服务端提供成员权限、消息历史与实时通知。';
+      el('group-composer-label').textContent='发送给 '+person.name;
+      el('group-chat-send').textContent='发送 ↗';
+      el('group-chat-reply').placeholder='输入给'+person.name+'的消息…';
+      el('group-chat-reply').setAttribute('aria-label','发送给'+person.name+'的内部消息');
+    }else{
+      el('group-chat-title').textContent=group.name;
+      el('group-chat-subtitle').textContent=`${group.detail} · ${group.members.length} 位成员`;
+      el('group-chat-member-count').textContent=`${group.members.length} 人`;
+      el('group-chat-members').innerHTML=group.members.map(name=>`<div class="group-member"><span class="avatar">${safe(name.slice(0,1))}</span><span><strong>${safe(name)}</strong><small>${name==='陈小雨'?'我 · 客服':'团队成员'}</small></span></div>`).join('');
+      el('group-chat-note').textContent='此处是团队内部群聊演示，消息不会发送到微信客服客户。';
+      el('group-chat-aside-title').textContent='群聊信息';
+      el('group-chat-member-label').textContent='群成员';
+      el('group-chat-aside-note').textContent='群聊、成员和消息目前保存在本次页面会话中。正式接入时需要服务端提供群权限、消息历史与实时通知。';
+      el('group-composer-label').textContent='发送到内部群聊';
+      el('group-chat-send').textContent='发送群消息 ↗';
+      el('group-chat-reply').placeholder='输入群消息…';
+      el('group-chat-reply').setAttribute('aria-label','发送到内部群聊的消息');
+    }
+    const dayLabel=person?'今天 · 内部会话':'今天 · 内部协作';
+    const emptyText=person?`还没有和${person.name}的会话，发条消息开始协作。`:'群聊已创建，发送第一条消息开始协作。';
+    el('group-chat-messages').innerHTML=`<div class="day">${safe(dayLabel)}</div>`+(messages.length?messages.map(message=>`<div class="message ${message.sender==='陈小雨'?'agent':''}"><div class="avatar">${safe(message.sender.slice(0,1))}</div><div class="message-content"><div class="message-meta">${safe(message.sender)} · ${safe(message.time)}</div><div class="bubble"></div></div></div>`).join(''):`<div class="empty">${safe(emptyText)}</div>`);
+    el('group-chat-messages').querySelectorAll('.bubble').forEach((bubble,index)=>bubble.textContent=messages[index].text);
     el('group-chat-messages').scrollTop=el('group-chat-messages').scrollHeight;
+  }
+  // 买家联系人上记的是“当时那条会话”的 ID。登录后会话列表会被真实后端数据替换
+  // （见 loadRemoteConversations），演示数据里的 ID 可能已经不存在，所以先按 ID 找，
+  // 再按客户名兜底；都找不到时由调用方给出提示。
+  function findBuyerConversation(person){
+    if(!person)return null;
+    return conversations.find(item=>String(item.id)===String(person.conversationId))
+      ||conversations.find(item=>item.name===person.name)
+      ||null;
   }
   // TODO(API): Fetch team and buyer directories by tenant and authorized store.
   // Group membership must be stored server-side; these mutable arrays are demo data.
@@ -449,7 +629,8 @@
     const term=el('contact-search').value.trim();
     el('add-contact-group').textContent=category==='groupChats'?'＋ 新建群聊':'＋ 新建分组';
     el('contact-search').placeholder=category==='groupChats'?'搜索群聊或成员':'搜索姓名或分组';
-    el('add-contact-group').hidden=category==='blacklist';
+    // 维护分组和建群是管理动作，客服角色不提供入口。
+    el('add-contact-group').hidden=category==='blacklist'||!canManageContacts();
     document.querySelectorAll('[data-contact-category]').forEach(button=>button.classList.toggle('active',button.dataset.contactCategory===category));
     if(category==='groupChats'){
       const visible=groupChats.filter(group=>group.name.includes(term)||group.members.some(name=>name.includes(term)));
@@ -472,21 +653,33 @@
       const visible=term&&!group.includes(term)?grouped.filter(person=>person.name.includes(term)||person.detail.includes(term)):grouped;
       const key=category+':'+group;
       const open=Boolean(term)||expandedContactGroups.has(key);
-      return `<section class="contact-group"><button class="contact-group-toggle" type="button" data-group="${safe(group)}" aria-expanded="${open}"><span class="contact-group-arrow">▶</span>${safe(group)}<span class="contact-group-count">${grouped.length}</span></button><div class="contact-group-body" ${open?'':'hidden'}>${visible.length?visible.map(person=>`<div class="contact-entry"><button class="contact-entry-main" type="button" data-contact-id="${safe(person.id)}"><span class="avatar">${safe(person.initial)}</span><span class="contact-entry-text"><span class="contact-entry-name">${safe(person.name)}</span><span class="contact-entry-detail">${safe(person.detail)}</span></span></button><button class="contact-more" type="button" data-contact-more="${safe(person.id)}" aria-label="管理 ${safe(person.name)} 的分组">⋯</button></div>`).join(''):'<div class="contact-empty">暂无联系人</div>'}</div></section>`;
+      return `<section class="contact-group"><button class="contact-group-toggle" type="button" data-group="${safe(group)}" aria-expanded="${open}"><span class="contact-group-arrow">▶</span>${safe(group)}<span class="contact-group-count">${grouped.length}</span></button><div class="contact-group-body" ${open?'':'hidden'}>${visible.length?visible.map(person=>{
+        // 同事行：有内部会话的显示最后一条消息时间，当前打开的高亮并标记给读屏。
+        const thread=category==='team'?directThreads.get(person.id):null;
+        const lastMessage=thread?.at(-1);
+        const selected=category==='team'&&person.id===activeDirectId;
+        return `<div class="contact-entry${selected?' active':''}"><button class="contact-entry-main" type="button" data-contact-id="${safe(person.id)}"${selected?' aria-current="true"':''}><span class="avatar">${safe(person.initial)}</span><span class="contact-entry-text"><span class="contact-entry-name">${safe(person.name)}</span><span class="contact-entry-detail">${safe(person.detail)}</span></span></button>${lastMessage?`<span class="time">${safe(lastMessage.time)}</span>`:''}${canManageContacts()?`<button class="contact-more" type="button" data-contact-more="${safe(person.id)}" aria-label="管理 ${safe(person.name)} 的分组">⋯</button>`:''}</div>`;
+      }).join(''):'<div class="contact-empty">暂无联系人</div>'}</div></section>`;
     }).join(''):'<div class="contact-empty">没有找到匹配的联系人或分组</div>';
     document.querySelectorAll('.contact-group-toggle').forEach(button=>button.onclick=()=>{
       const key=category+':'+button.dataset.group;
       if(expandedContactGroups.has(key))expandedContactGroups.delete(key);else expandedContactGroups.add(key);
       renderContacts();
     });
-    document.querySelectorAll('[data-contact-id]').forEach(button=>button.onclick=()=>{
+    document.querySelectorAll('[data-contact-id]').forEach(button=>button.onclick=async()=>{
       const person=members.find(item=>item.id===button.dataset.contactId);
-      if(category==='buyers'&&person.conversationId){
-        const conversation=conversations.find(item=>item.id===person.conversationId);
+      if(category==='buyers'){
+        const conversation=findBuyerConversation(person);
+        // 找不到就明确告知：静默失败会让“点不进去”变成无法排查的问题。
+        if(!conversation){toast((person?.name||'该买家')+'当前没有可打开的会话');return}
         currentId=conversation.id;
         conversationStatus=conversation.status;
         setQueueMode('conversations');
         renderAll();
+        if(backendConnected)try{await loadConversationDetail(currentId)}catch(error){toast(error.message)}
+      }else if(category==='team'){
+        // 同事：点名字直接进入一对一内部会话，不走分组维护弹窗。
+        showDirectChat(person.id);
       }else openContactEditor(person);
     });
     document.querySelectorAll('[data-contact-more]').forEach(button=>button.onclick=()=>{
@@ -494,6 +687,8 @@
     });
   }
   function openContactEditor(person){
+    // 分组维护属于管理动作：客服即使通过其它入口触发也要被拦下。
+    if(!canManageContacts()){toast('当前角色无权维护联系人分组');return}
     const options=contactGroups[contactCategory].map(group=>`<option value="${safe(group)}" ${group===person.group?'selected':''}>${safe(group)}</option>`).join('');
     showModal(person.name+' · 联系人分组',person.detail,()=>{
       const nextGroup=el('contact-target-group').value;
@@ -513,7 +708,8 @@
     el('conversation-ended-note').hidden=!c||c.status!=='ended';
     if(!el('group-chat-view').hidden)el('customer-assist').hidden=true;
     else el('customer-assist').hidden=!c;
-    if(!c){el('messages').innerHTML='';el('send-btn').disabled=true;return}
+    if(!c){el('messages').innerHTML='';el('send-btn').disabled=true;renderReplyWindow(null);return}
+    renderReplyWindow(c);
     const storeLabel=backendConnected?c.store:`青禾生活${c.store}`;
     el('chat-name').innerHTML=`${safe(c.name)} <span class="pill ${c.status==='ended'?'gray':'blue'}" id="chat-status">${c.status==='ended'?'已结束':'接待中'}</span>`; el('chat-subtitle').textContent=`企业微信客服 · ${storeLabel} · ${c.status==='ended'?'会话已结束':c.canReply===false?'只读会话':'接待人 '+profile.name}`;
     const deliveryLabels={pending:'等待渠道发送',sent:'渠道已发送',failed:'渠道发送失败',unknown:'渠道结果未知'};
@@ -533,12 +729,23 @@
     renderAttachment();
     el('messages').scrollTop=el('messages').scrollHeight; el('send-btn').disabled=c.status==='ended'||presenceState==='offline'||c.canReply===false;
     el('close-btn').hidden=c.status==='ended';
-    el('transfer-btn').hidden=c.status==='ended'||backendConnected&&(c.rawStatus!=='claimed'||c.canReply!==true&&!c.canTakeOver);
+    // 转交只在服务端确实允许的动作上出现：正在接待的会话由当前接待人转移；接待人
+    // 已下线的会话由管理员或同店铺坐席接手后再转移——后者就是会话详情返回的
+    // canTakeOver（平台规则 mayTakeOverClaim 的读法，前端不自己推）。待接入（尚未
+    // 认领）和已结束会话本就没有转移动作，按钮不出现。前端只收口入口，转交能否
+    // 成立仍由服务端在提交时判定；被拒绝时提示服务端给出的说明。
+    const canTransfer=backendConnected
+      ?c.rawStatus==='claimed'&&(c.assignedMemberId===selfMemberId||c.canTakeOver===true)
+      :c.status==='active';
+    el('transfer-btn').hidden=!canTransfer;
     el('assignment-history-btn').hidden=!backendConnected;
     el('close-btn').hidden=c.status==='ended'||backendConnected&&c.canReply!==true&&!c.canTakeOver;
   }
-  // Candidate response source is returned asynchronously after message intake.
-  // Preserve candidate ID, source chunks, score and degradation reason in the API.
+  // Candidate responses come from POST /retrieval/suggestions: the server classifies the
+  // intent, searches the 话术库 first (a hit is returned and no model is asked), and only
+  // falls back to the 商品库 plus generation. The candidate id, the recall evidence, the
+  // score and every degradation reason travel on the set, so this panel renders facts
+  // instead of guessing why the list is empty.
   function renderCandidates(){
     const c=activeConversation();
     if(!c||c.status==='ended'){
@@ -567,8 +774,56 @@
     el('candidate-label').textContent=currentSuggestions.length?currentSuggestions.length+' 条候选回复':'暂无可靠候选';
     el('candidate-status').textContent=currentSuggestions.length?'已完成检索':'请人工处理';
     el('product-section').style.display=[1,4].includes(c.id)?'':'none';
-    el('candidates').innerHTML=currentSuggestions.length?currentSuggestions.map((s,i)=>`<div class="candidate"><div class="candidate-top"><span class="candidate-title">${i+1}. ${safe(s.title)}</span><span class="pill ${i===0?'blue':'gray'}">${i===0?'优先':'备选'}</span></div><p>${safe(s.text)}</p><div class="candidate-bottom"><span class="source" title="${safe(s.source)}">${safe(s.source)}</span><button class="use-btn" data-index="${i}">选用 ↗</button></div></div>`).join(''):'<div class="footnote">知识库未命中可靠内容，请客服手动回复或使用快捷短语。</div>';
-    document.querySelectorAll('.use-btn').forEach(b=>b.onclick=()=>{const i=Number(b.dataset.index);el('reply').value=currentSuggestions[i].text;selectedSuggestion=i;originalSuggestion=currentSuggestions[i].text;el('reply-hint').textContent='已选用第 '+(i+1)+' 条候选 · 可编辑后发送';el('reply').focus();toast('候选回复已填入编辑区')});
+    el('candidates').innerHTML=currentSuggestions.length?candidateCardsHtml(currentSuggestions):'<div class="footnote">知识库未命中可靠内容，请客服手动回复或使用快捷短语。</div>';
+    bindCandidateUse();
+  }
+  // 候选卡片与「选用」绑定由两个分支共用（演示数据 / 服务端 set）：坐席看到的卡片行为必须
+  // 一致，唯一差别是服务端候选带 candidateId，采纳时一路送到发送接口作为来源追溯。
+  function candidateCardsHtml(list){
+    return list.map((s,i)=>`<div class="candidate"><div class="candidate-top"><span class="candidate-title">${i+1}. ${safe(s.title)}</span><span class="pill ${i===0?'blue':'gray'}">${i===0?'优先':'备选'}</span></div><p>${safe(s.text)}</p><div class="candidate-bottom"><span class="source" title="${safe(s.source)}">${safe(s.source)}</span><button class="use-btn" data-index="${i}">选用 ↗</button></div></div>`).join('');
+  }
+  function bindCandidateUse(){
+    document.querySelectorAll('.use-btn').forEach(b=>b.onclick=()=>{
+      const i=Number(b.dataset.index);
+      el('reply').value=currentSuggestions[i].text;
+      selectedSuggestion=i;
+      originalSuggestion=currentSuggestions[i].text;
+      selectedCandidateId=currentSuggestions[i].candidateId||'';
+      el('reply-hint').textContent='已选用第 '+(i+1)+' 条候选 · 可编辑后发送';
+      el('reply').focus();
+      toast('候选回复已填入编辑区');
+    });
+  }
+  // 服务端稳定原因码 → 坐席能读懂的一句话。这张表就是「为什么没有候选」的答案，新增原因码时
+  // 前端要跟着补，否则面板只能把原始码摆给坐席看。
+  const SUGGESTION_REASON_TEXT={
+    chitchat_no_retrieval:'客户只是寒暄，未做检索。',
+    no_generation_provider:'未配置生成模型，只显示检索到的内容。',
+    generation_unavailable:'生成模型调用失败，已退回检索结果。',
+    semantic_recall_unavailable:'向量检索未运行（未配置嵌入模型），本次只用了关键词检索。',
+    no_knowledge_match:'话术库与商品库都没有命中。',
+    empty_query:'这条客户消息没有可检索的文字（可能是语音或图片）。',
+    content_blocked:'部分候选命中违禁词，已被内容安全拦截。',
+  };
+  const SUGGESTION_KIND_TEXT={shortcut:'快捷话术',faq:'店铺 FAQ',product:'商品资料'};
+  const SUGGESTION_ORIGIN_TEXT={script:'话术库命中（未生成）',catalogue:'商品库命中（未生成）',generated:'AI 生成',none:'无候选'};
+  function reasonTexts(reasons){return (reasons||[]).map(code=>SUGGESTION_REASON_TEXT[code]||('服务端原因：'+code))}
+  // 「检索依据」弹窗：真实会话渲染服务端写下来的那一份证据，而不是另一段示例文案。
+  function suggestionDetailSummary(set){
+    if(!set)return '';
+    return '意图：'+(set.intent==='chitchat'?'闲聊':'询问')
+      +' · 来源：'+(SUGGESTION_ORIGIN_TEXT[set.origin]||set.origin)
+      +' · 生成器：'+(set.provider==='deepseek'?'大模型':'检索与规则');
+  }
+  function suggestionDetailText(set){
+    if(!set)return '';
+    const rows=(set.candidates||[]).map(candidate=>{
+      const modes=(candidate.recall?.modes||[]).map(mode=>mode==='semantic'?'向量':'关键词').join('+');
+      const evidence=candidate.recall?('召回第 '+candidate.recall.rank+' 名（'+modes+'）'):'仅词面匹配';
+      return '<div>· '+safe(SUGGESTION_KIND_TEXT[candidate.kind]||candidate.kind)+'「'+safe(candidate.title)+'」<br>　来源：'+safe(candidate.sourceId)+' · 依据：'+safe(evidence)+' · 词面分 '+(Number(candidate.score)||0)+'</div>';
+    }).join('');
+    const reasons=reasonTexts(set.fallbackReasons).map(text=>'<div>· '+safe(text)+'</div>').join('');
+    return '<div class="review-card" style="font-size:12px">'+(rows||'<div>本次没有任何候选。</div>')+(reasons?'<div style="margin-top:8px">降级说明：</div>'+reasons:'')+'</div>';
   }
   function candidateReason(code){return {no_generation_provider:'未配置生成模型，使用知识库检索回复',no_knowledge_match:'知识库未命中',empty_query:'暂无客户问题',semantic_recall_unavailable:'语义检索不可用，使用关键词检索',generation_provider_failed:'生成模型失败，使用知识库检索回复',safety_blocked:'候选因内容安全规则被过滤'}[code]||code}
   function renderRemoteCandidates(c){
@@ -632,10 +887,13 @@
     contactCategory=button.dataset.contactCategory;
     el('contact-search').value='';
     if(contactCategory==='groupChats'&&activeGroupChatId)showGroupChat(activeGroupChatId);
+    else if(contactCategory==='team'&&activeDirectId)showDirectChat(activeDirectId);
     else{showCustomerConversation();renderContacts();}
   });
   el('contact-search').oninput=renderContacts;
   el('add-contact-group').onclick=()=>{
+    // 新建分组/新建群聊都是目录维护动作，客服角色只能读和发起一对一会话。
+    if(!canManageContacts()){toast('当前角色无权维护联系人分组');return}
     if(contactCategory==='groupChats'){
       const memberOptions=contacts.team.filter(person=>person.name!=='陈小雨').map(person=>`<label class="group-member-option"><input type="checkbox" name="new-group-member" value="${safe(person.name)}"> ${safe(person.name)} <span>${safe(person.group)}</span></label>`).join('');
       showModal('新建内部群聊','选择参与协作的团队成员。当前仅在本次页面会话中保存。',()=>{
@@ -662,19 +920,23 @@
       toast('已创建分组「'+name+'」（模拟）');
     },'<input id="new-contact-group-name" class="field" maxlength="24" placeholder="例如：售前客服">');
   };
-  function sendGroupMessage(){
-    const group=groupChats.find(item=>item.id===activeGroupChatId);
-    const text=el('group-chat-reply').value.trim();
-    if(!group)return;
-    if(!text){toast('请输入群消息');return}
-    group.messages.push({sender:'陈小雨',time:new Date().toLocaleTimeString('zh-CN',{hour:'2-digit',minute:'2-digit',hour12:false}),text});
-    el('group-chat-reply').value='';
-    renderGroupChat();
+  function sendInternalMessage(){
+    const person=activeContact();
+    const group=person?null:groupChats.find(item=>item.id===activeGroupChatId);
+    const input=el('group-chat-reply');
+    const text=input.value.trim();
+    if(!person&&!group)return;
+    if(!text){toast(person?'请输入消息内容':'请输入群消息');return}
+    const message={sender:'陈小雨',time:new Date().toLocaleTimeString('zh-CN',{hour:'2-digit',minute:'2-digit',hour12:false}),text};
+    if(person)directThreads.set(person.id,[...(directThreads.get(person.id)||[]),message]);
+    else group.messages.push(message);
+    input.value='';
+    renderInternalChat();
     renderContacts();
-    toast('群消息已加入本地演示');
+    toast(person?`已发送给${person.name}（本地演示）`:'群消息已加入本地演示');
   }
-  el('group-chat-send').onclick=sendGroupMessage;
-  el('group-chat-reply').addEventListener('keydown',event=>{if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();sendGroupMessage()}});
+  el('group-chat-send').onclick=sendInternalMessage;
+  el('group-chat-reply').addEventListener('keydown',event=>{if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();sendInternalMessage()}});
   // POST /api/v1/messages/send: send final edited text with Idempotency-Key.
   // HTTP success only means the local message/send task exists. Delivery status
   // must arrive in a later event and be rendered separately in the real app.
@@ -688,6 +950,11 @@
     if(backendConnected){
       if(attachment){toast('首轮整合尚未开放真实附件发送，请先发送文字');return}
       if(!text){toast('请输入回复内容');return}
+      // 服务端返回的窗口说这条发不出去时不提交。判决本来就在服务端（Worker 的发送闸门，
+      // 拒收会记下可见的降级原因），这里只是把它念给坐席听——不再像原型那样自己数一个
+      // 写死的额度。前端据此拦下提交，不是前端拥有这条规则。
+      const windowView=replyWindowView(c.replyWindow);
+      if(windowView&&!windowView.open){toast(windowView.toast||'当前不能发送外发消息');return}
       const backendSource=selectedSuggestion<0?'manual_typed':text===originalSuggestion?'direct_candidate':'edited_send';
       el('send-btn').disabled=true;
       try{
@@ -698,6 +965,9 @@
           el('reply-hint').textContent='Enter 发送 · Shift+Enter 换行';
         }
         await loadRemoteConversations();
+        // 这一条刚花掉一个窗口额度，提醒上的数字得跟着走：重新读一次详情，而不是在
+        // 浏览器里自减（自减出来的数字与服务端对不上，正是这次要改掉的毛病）。
+        await loadConversationDetail(c.backendId);
         toast('消息已写入后端发送队列');
       }catch(error){toast(error.message||'消息发送失败')}
       finally{renderMessages()}
@@ -708,7 +978,7 @@
     c.messages.push({by:'agent',time:new Date().toLocaleTimeString('zh-CN',{hour:'2-digit',minute:'2-digit',hour12:false}),text,source,attachment});
     replyAttachments.delete(currentId);
     c.preview=text||`[${{image:'图片',video:'视频',file:'文件'}[attachment.kind]}]`;
-    c.time='刚刚';el('reply').value='';selectedSuggestion=-1;originalSuggestion='';el('reply-hint').textContent='Enter 发送 · Shift+Enter 换行';
+    c.time='刚刚';el('reply').value='';selectedSuggestion=-1;originalSuggestion='';selectedCandidateId='';el('reply-hint').textContent='Enter 发送 · Shift+Enter 换行';
     const budget=el('budget');budget.textContent=Math.max(0,Number(budget.textContent)-1);
     renderAll();toast('已创建发送任务 · '+source+'（模拟）');
   }
@@ -764,7 +1034,7 @@
     if(!phrase||!phraseRange)return;
     // 仅替换光标前的匹配词，保留草稿其他段落；选中后仍由客服确认发送。
     el('reply').setRangeText(phrase.text,phraseRange.start,phraseRange.end,'end');
-    selectedSuggestion=-1;originalSuggestion='';
+    selectedSuggestion=-1;originalSuggestion='';selectedCandidateId='';
     phrase.useCount=(phrase.useCount||0)+1;
     el('reply-hint').textContent='已填入快捷短语 · 可编辑后发送';
     closePhraseSuggestions();el('reply').focus();
@@ -845,7 +1115,7 @@
     }
     insertReplyText(phrase.text);
     closePhraseSuggestions();
-    selectedSuggestion=-1;originalSuggestion='';
+    selectedSuggestion=-1;originalSuggestion='';selectedCandidateId='';
     phrase.useCount=(phrase.useCount||0)+1;
     el('reply-hint').textContent=`已插入${phrase.scope}短语 · 可编辑后发送`;
     renderPhrasePage();renderPhraseAside();
@@ -992,7 +1262,7 @@
     try{
       const set=await api.suggestionDetail(state.set.id);
       if(epoch!==workspaceEpoch||String(currentId)!==String(c.id))return;
-      showModal('候选来源与检索依据',`生成方式：${set.provider==='deepseek'?'模型生成':'知识库检索'}；${(set.fallbackReasons||[]).map(candidateReason).join('；')||'无降级'}。`,()=>{},`<div class="assignment-history">${set.candidates.map(item=>`<div class="review-card"><strong>${safe(item.title)}</strong><p>${safe(item.content)}</p><small>来源：${safe(item.kind)} / ${safe(item.sourceId)} · 评分 ${safe(item.score)}<br>公司 ${safe(item.tenantId)} · 门店 ${safe(item.storeId)}</small></div>`).join('')||'暂无候选'}</div>`,'关闭');
+      showModal('候选来源与检索依据',suggestionDetailSummary(set),()=>{},suggestionDetailText(set),'关闭');
     }catch(error){toast(error.message||'候选详情读取失败')}
   };
   // TODO(API): Persist presence per authorized store. Only "online" participates

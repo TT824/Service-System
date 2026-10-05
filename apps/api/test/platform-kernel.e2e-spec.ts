@@ -274,10 +274,26 @@ describe('Platform kernel (interface)', () => {
       conversation: Record<string, unknown>;
       canTakeOver: boolean;
       canTakeOverSelf: boolean;
+      replyWindow: {
+        open: boolean;
+        windowEndsAt: string | null;
+        messageLimit: number;
+        remaining: number;
+        refusal: string | null;
+      };
     };
     expect(verdict.canTakeOver).toBe(true);
     // 小云在线接单，接得住：控制台给她的是「接手」。
     expect(verdict.canTakeOverSelf).toBe(true);
+    // 外发提醒读的那份窗口随详情一起下发。这条会话的客户从未通过渠道发来消息（没有开户
+    // 事件），所以窗口是「还没有」，而不是「已关闭」——控制台要能说清这个区别。
+    expect(verdict.replyWindow).toMatchObject({
+      open: false,
+      windowEndsAt: null,
+      messageLimit: 5,
+      remaining: 0,
+      refusal: 'window_missing',
+    });
 
     // 同一份会话，小云改成「离开」：旁路照旧开着（拿得开），但派单不会再派给她，
     // 于是「接手」必须收回去——否则坐席在界面上点到的只会是一个 409。

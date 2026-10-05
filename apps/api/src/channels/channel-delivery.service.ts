@@ -40,6 +40,7 @@ import { createHash } from 'node:crypto';
 import { HttpStatus, Inject, Injectable } from '@nestjs/common';
 import {
   deliveryStatusForFailure,
+  describeReplyWindow,
   evaluateDeliveryWindow,
   type ChannelAdapter,
   type ChannelFailureCode,
@@ -51,6 +52,7 @@ import {
   type MessageDelivery,
   type MessageStatusEvent,
   type MessageType,
+  type ReplyWindowStatus,
   type UnifiedMessage,
 } from '@kefu/core';
 import { PLATFORM_REPOSITORY, type PlatformRepository } from '../platform/platform-repository';
@@ -692,6 +694,31 @@ export class ChannelDeliveryService {
       details.push(await this.buildDetail(delivery));
     }
     return details;
+  }
+
+  /**
+   * The customer's current reply window, as the console renders it.
+   *
+   * The window is keyed by the customer rather than by the conversation, because
+   * the *customer-service rule* is about the customer: the same 48 hours and the
+   * same five replies follow them from one conversation to the next. The key is
+   * therefore built here, from the conversation's own channel/store/customer
+   * triple — the same helper the send path uses, so a console reading this and a
+   * send being refused cannot be looking at two different windows.
+   *
+   * No refusal is raised for a missing window: "the customer has not written yet"
+   * is an answer a console shows, not an error.
+   *
+   * @param conversation - Conversation whose customer's window is read.
+   * @returns The deadline and slots left, plus whether a reply may be sent now.
+   */
+  async replyWindow(conversation: Conversation): Promise<ReplyWindowStatus> {
+    const key = this.windowKey(
+      conversation.tenantId,
+      conversation.storeId,
+      conversation.externalCustomerId,
+    );
+    return describeReplyWindow(await this.reliability.getQuotaWindow(key), new Date().toISOString());
   }
 
   // --------------------------------------------------------------------------

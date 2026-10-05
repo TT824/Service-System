@@ -192,7 +192,8 @@ curl http://localhost:3000/api/v1/admin/accounts -H "authorization: Bearer $TOKE
   URL 校验 `GET /channels/wecom/callback`、平台自有的投递状态入口
   `POST /channels/wecom/status`（**需认证**，不是企业微信提供的匿名回调地址）、投递详情
   `GET /channels/deliveries/:id` 与重试 `POST /channels/deliveries/:id/retry` 均已可用；
-  出站发送会在调用适配器前校验 48 小时 / 5 条回复预算，并记录投递状态、尝试次数与降级原因。
+  出站发送会在调用适配器前校验 48 小时 / 5 条回复预算，并记录投递状态、尝试次数与降级原因；
+  工作台「外发提醒」读的就是这同一个窗口（会话详情的 `replyWindow`，按客户而非按会话计算）。
 - **微信客服传输（`WECOM_TRANSPORT=real`）**：绑定微信客服
   （`/cgi-bin/kf/*`，**不是**群机器人 webhook）适配器，封装回调 `msg_signature` 校验、
   AES-256-CBC + PKCS#7 解密、XML 文本/图片/链接映射，以及经注入式 HTTP 客户端的
@@ -308,6 +309,8 @@ npm run db:rollback    # 回滚最近一次迁移
 npm run db:status      # 查看已应用/待应用迁移
 npm run db:check       # 只读 schema 冒烟检查：vector 扩展、schema_migrations 与核心平台表
 npm run db:seed        # 幂等写入开发种子数据（目录 fixtures + 本地管理员账号）
+npm run db:seed:demo   # 可选：写入演示会话、消息与外发回复窗口，让工作台有可打开的会话
+npm run db:seed:demo:knowledge   # 可选：写入演示话术库与商品库，让智能辅助有内容可检索
 ```
 
 `db:seed` 在**单个事务**内先写入与内存 store 一致的目录 fixtures（2 个租户、3 家门店、
@@ -318,6 +321,36 @@ npm run db:seed        # 幂等写入开发种子数据（目录 fixtures + 本�
 `0 inserted`，并且**不会**重置已写入的密码或其时间戳。若固定身份已被别的行占用（例如
 `admin` 用户名已被其他账号使用、密码身份属于另一个账号、`u-platform-admin` 已链接到其他
 账号），种子会以清晰的非敏感诊断信息失败并回滚整个事务，而不会静默接管。
+
+`db:seed:demo` 是**可选**的演示数据：会话在真实系统里由企业微信渠道回调创建，本机没有绑定
+好的渠道账号，因此 `db:seed` 之后工作台的「我的会话」和买家联系人都没有内容可打开。该命令把
+`apps/web/src/mock-data.js` 里的演示客户写进演示租户 `tenant-acme`、门店
+`store-acme-flagship` 和坐席 `u-t1-agent-2`（账号 `agent01`）：5 条会话（4 条接待中、1 条已结束）
+与 10 条消息，客户名与演示前端里的买家一致，因此「点买家姓名 → 打开该客户会话」这条路径在本地
+可用。它还会为每位演示客户写一行 `send_quota_windows`——客户最近一条入向消息开启的 48 小时回复
+窗口，也就是工作台「外发提醒」读的那份数据（`GET /conversations/:id` 的 `replyWindow`）；这些消息
+没走过渠道回调，不补这一行的话提醒会显示「窗口未开启」，而对话记录明明是从客户开口开始的。
+窗口按同一份对话记录推算：最近一条入向消息是开启时刻，其后的客服回复是已用掉的额度。它
+**不属于** `db:seed`，也不被任何测试调用——本机 e2e 测试使用同一个数据库。幂等
+（固定 ID + `ON CONFLICT DO NOTHING`）；撤销用
+`npm run seed:demo --workspace @kefu/database -- --undo`（只删这几条会话，消息随外键级联删除，
+回复窗口一并删除——它对会话没有外键，不会自己消失；
+`db:prune` 清的是另一件事，不能用来撤销这批数据）。
+
+`db:seed:demo:knowledge` 是同一类**可选**演示数据的另一半：`db:seed` 与 `db:seed:demo` 都不写
+任何话术库或商品库行，因此智能辅助的两条检索腿在新库上没有可检索内容。该命令向演示租户与门店写入
+2 条 FAQ、1 条快捷话术，以及 1 个商品（`product_spus`）和它的 2 个规格（`product_skus`，含「米白」
+与「黑色」）；措辞刻意对齐演示会话里客户的原话，使智能辅助同时可演示「话术库命中即直出、不调用模型」
+与「话术库未命中则回退商品库」。商品必须落在 `product_spus` / `product_skus`：兼容读的 `products`
+表**不参与索引**，只放那里的商品既拿不到召回证据、又不可能靠整句字面命中被引擎选中。撤销用
+`npm run seed:demo:knowledge --workspace @kefu/database -- --undo`。Worker 的**知识来源扫描不依赖嵌入
+provider**，所以本机未配置任何模型时也会写出切片与 BM25 词项，「话术库优先」这条路径仍然可用。
+
+撤销会**连它产生的知识切片一起删**，这一步不能省：切片对来源行没有外键，Worker 的规则是「来源行被删掉
+的切片留在索引里不动」（`knowledge-index-lifecycle.integration.spec.ts` 明确钉住了这个行为），于是两个
+e2e 套件把整张切片表当成「上次跑完必须为空」来断言（`retrieval-overreach`、`knowledge-index-status`）。
+因此**跑 `npm test` 之前先 `--undo`**：留着这批演示数据，这两个套件会以「knowledge_chunks already holds
+rows for tenant-acme」失败，而那是演示数据而不是代码问题。
 
 `db:check` 只执行 `SELECT`，可对已迁移数据库重复运行（幂等、不改动任何 schema）：它校验
 `vector`（pgvector）扩展、迁移记录表 `schema_migrations` 以及 `database/migrations`

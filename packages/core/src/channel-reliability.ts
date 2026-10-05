@@ -329,6 +329,86 @@ export function evaluateDeliveryWindow(
   return { allowed: true, window };
 }
 
+/** Why a reply window cannot take another reply, when it cannot. */
+export type ReplyWindowRefusal = DeliveryWindowRefusal['code'];
+
+/**
+ * One customer's reply window as a console displays it.
+ *
+ * The console has to show the deadline and the slots left, and both are facts of
+ * the *window row* rather than of any one send. Reading them off a decision would
+ * work only while the window is open: the refusal an exhausted or expired window
+ * produces carries no window at all, so a console that only read decisions would
+ * lose the deadline at exactly the moment it starts to matter — when the seat
+ * needs to be told *when* the customer wrote, and that the wait is what resets
+ * the budget.
+ *
+ * So this is a projection, not a second rule: {@link evaluateDeliveryWindow}
+ * still decides, and every field below is derived from its verdict plus the row
+ * it was passed. A console showing "3 left" while the worker refuses the fourth
+ * send is the bug this shape exists to prevent, so the numbers move together or
+ * not at all.
+ */
+export type ReplyWindowStatus = {
+  /** Whether a reply may be sent right now. */
+  readonly open: boolean;
+  /** Instant the latest inbound event opened the window, or `null` if none has. */
+  readonly windowStartedAt: string | null;
+  /** Exclusive end of the window, or `null` if no inbound event has opened one. */
+  readonly windowEndsAt: string | null;
+  /**
+   * Logical replies allowed in this window; {@link DELIVERY_WINDOW_MESSAGE_LIMIT}
+   * when no window row exists yet, because that is the budget the customer's next
+   * message will open.
+   */
+  readonly messageLimit: number;
+  /** Replies still available: the limit minus what has been handed to the provider. */
+  readonly remaining: number;
+  /**
+   * Why no reply may be sent, or `null` while one may be.
+   *
+   * `window_missing` is not a failure — it is "the customer has not written yet" —
+   * and it is deliberately distinct from `window_expired`, because the console
+   * tells the seat different things for the two ("wait for the customer" against
+   * "the customer wrote 3 days ago; a new message reopens the window").
+   */
+  readonly refusal: ReplyWindowRefusal | null;
+};
+
+/**
+ * Project a customer's reply window into the facts a console renders.
+ *
+ * @param window - The customer's current window, or `undefined` when none is open.
+ * @param now - Evaluation instant (ISO); the same one {@link evaluateDeliveryWindow} judges at.
+ * @returns The deadline and the slots left, plus whether a reply may be sent now.
+ */
+export function describeReplyWindow(
+  window: SendQuotaWindow | undefined,
+  now: string,
+): ReplyWindowStatus {
+  const decision = evaluateDeliveryWindow(window, now);
+  if (decision.allowed) {
+    return {
+      open: true,
+      windowStartedAt: decision.window.windowStartedAt,
+      windowEndsAt: decision.window.windowEndsAt,
+      messageLimit: decision.window.messageLimit,
+      // Clamped rather than computed raw: a row whose count somehow sits above its
+      // own limit must not render as a negative number of replies.
+      remaining: Math.max(0, decision.window.messageLimit - decision.window.reservedCount),
+      refusal: null,
+    };
+  }
+  return {
+    open: false,
+    windowStartedAt: window?.windowStartedAt ?? null,
+    windowEndsAt: window?.windowEndsAt ?? null,
+    messageLimit: window?.messageLimit ?? DELIVERY_WINDOW_MESSAGE_LIMIT,
+    remaining: 0,
+    refusal: decision.code,
+  };
+}
+
 /** Latest delivery status an adapter failure maps to. */
 export function deliveryStatusForFailure(failure: {
   readonly code: ChannelFailureCode;

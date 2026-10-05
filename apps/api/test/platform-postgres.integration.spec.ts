@@ -721,6 +721,8 @@ describe.skipIf(!reachable)('Platform persistence (PostgreSQL)', () => {
       storeId: storeA,
       conversationId: conversation.id,
       provider: 'none',
+      intent: 'question',
+      origin: 'catalogue',
       candidates: [
         {
           rank: 1,
@@ -731,16 +733,24 @@ describe.skipIf(!reachable)('Platform persistence (PostgreSQL)', () => {
           title: '集成测试商品',
           content: '集成测试商品描述',
           score: 1,
+          recall: { rank: 2, modes: ['keyword'] },
         },
       ],
       fallbackReasons: ['no_generation_provider'],
     });
 
     expect(set.provider).toBe('none');
+    expect(set.intent).toBe('question');
+    expect(set.origin).toBe('catalogue');
     expect(set.candidates).toHaveLength(1);
     // JSONB candidates and reasons survive the round trip as structured values.
     const reread = await repository.getSuggestionSet(tenantA, set.id);
     expect(reread?.candidates[0]?.kind).toBe('product');
+    // The recall evidence is part of the candidate, not a field the mapper drops
+    // on the way back: 检索依据 is rendered from this and nothing else.
+    expect(reread?.candidates[0]?.recall?.rank).toBe(2);
+    expect(reread?.candidates[0]?.recall?.modes).toEqual(['keyword']);
+    expect(reread?.origin).toBe('catalogue');
     expect(reread?.fallbackReasons).toEqual(['no_generation_provider']);
     expect(await repository.getSuggestionSet(tenantB, set.id)).toBeUndefined();
   });
@@ -755,6 +765,8 @@ describe.skipIf(!reachable)('Platform persistence (PostgreSQL)', () => {
       storeId: storeA,
       conversationId: conversation.id,
       provider: 'deepseek',
+      intent: 'question',
+      origin: 'generated',
       candidates: [
         {
           rank: 1,
@@ -776,7 +788,32 @@ describe.skipIf(!reachable)('Platform persistence (PostgreSQL)', () => {
     // hard-coded `'none'` on the read path is exactly the kind of thing that
     // survives a write-side test.
     expect(reread?.provider).toBe('deepseek');
+    expect(reread?.origin).toBe('generated');
     expect(reread?.candidates[0]?.content).toBe('亲，这款有货的');
+  });
+
+  it('round-trips a chitchat set, whose emptiness is the decision rather than a failure', async () => {
+    // The case the columns were added for: an empty candidate list that means
+    // "nothing was searched" and not "the search failed". Asserted against the
+    // database because `0018`'s CHECK constraints, not the union type, are what
+    // decide whether the write survives.
+    const conversation = await openConversation(`suggest-chitchat-${RUN}`);
+    const set = await repository.createSuggestionSet({
+      tenantId: tenantA,
+      storeId: storeA,
+      conversationId: conversation.id,
+      provider: 'none',
+      intent: 'chitchat',
+      origin: 'none',
+      candidates: [],
+      fallbackReasons: ['chitchat_no_retrieval'],
+    });
+
+    const reread = await repository.getSuggestionSet(tenantA, set.id);
+    expect(reread?.intent).toBe('chitchat');
+    expect(reread?.origin).toBe('none');
+    expect(reread?.candidates).toEqual([]);
+    expect(reread?.fallbackReasons).toEqual(['chitchat_no_retrieval']);
   });
 
   it('lists the sets of one tenant and no other', async () => {
@@ -786,6 +823,8 @@ describe.skipIf(!reachable)('Platform persistence (PostgreSQL)', () => {
       storeId: storeA,
       conversationId: conversation.id,
       provider: 'none',
+      intent: 'question',
+      origin: 'catalogue',
       candidates: [],
       fallbackReasons: ['no_generation_provider'],
     });
