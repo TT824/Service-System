@@ -22,7 +22,7 @@
     }));
     root.innerHTML = pages.join('\n');
 
-    for (const src of ['src/api-client.js', 'src/realtime.js', 'src/mock-data.js', 'src/admin-data.js', 'src/exports.js', 'src/catalog.js', 'src/app.js', 'src/admin.js']) {
+    for (const src of ['src/api-client.js', 'src/realtime.js', 'src/mock-data.js', 'src/admin-data.js', 'src/exports.js', 'src/catalog.js', 'src/faq-variants.js', 'src/app.js', 'src/admin.js']) {
       await new Promise((resolve, reject) => {
         const script = document.createElement('script');
         script.src = src;

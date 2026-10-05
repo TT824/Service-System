@@ -20,22 +20,24 @@
     .rail-bottom { position:relative; z-index:60; margin-top:auto; display:flex; flex-direction:column; align-items:center; gap:12px; }
     .profile-btn { border:0; cursor:pointer; padding:0; overflow:hidden; }
     .profile-btn img,.profile-menu-avatar img,.agent-avatar img { width:100%; height:100%; object-fit:cover; border-radius:50%; }
-    .profile-menu { position:absolute; left:calc(100% + 12px); bottom:0; width:286px; padding:14px; border:1px solid #34424e; border-radius:12px; background:#202d38; color:#f6f8fb; box-shadow:0 18px 42px #16263744; text-align:left; }
+    /* 账号浮层沿用工作台的浅色卡片与蓝色操作，避免独立的深色主题。 */
+    .profile-menu { position:absolute; left:calc(100% + 12px); bottom:0; width:286px; padding:14px; border:1px solid var(--line); border-radius:12px; background:var(--white); color:var(--ink); box-shadow:var(--shadow); text-align:left; }
     .profile-menu-top { display:flex; align-items:center; gap:11px; }
-    .profile-menu-avatar { flex:none; width:42px; height:42px; display:grid; place-items:center; padding:0; overflow:hidden; border:0; border-radius:50%; background:#314451; color:#f6f8fb; font-weight:800; }
-    .profile-menu-avatar:hover,.profile-menu-avatar:focus-visible { outline:2px solid #93b5ff; }
+    .profile-menu-avatar { flex:none; width:42px; height:42px; display:grid; place-items:center; padding:0; overflow:hidden; border:0; border-radius:50%; background:var(--blue-soft); color:var(--blue); font-weight:800; }
+    .profile-menu-avatar:hover,.profile-menu-avatar:focus-visible { outline:2px solid var(--blue); outline-offset:2px; }
     .profile-menu-identity { min-width:0; display:flex; flex-direction:column; line-height:1.3; }
     .profile-menu-identity strong { overflow:hidden; white-space:nowrap; text-overflow:ellipsis; font-size:13px; }
-    .profile-menu-identity small { color:#aebdca; margin-top:4px; font-size:11px; }
-    .profile-menu-avatar-hint { display:block; margin:4px 0 11px 53px; padding:0; border:0; background:transparent; color:#aebdca; font-size:10px; }
-    .profile-menu-avatar-hint:hover { color:#fff; text-decoration:underline; }
-    .profile-menu-phone { display:flex; align-items:center; justify-content:space-between; gap:8px; padding:10px 3px; border-top:1px solid #394a55; border-bottom:1px solid #394a55; font-size:11px; }
-    .profile-menu-phone span { color:#aebdca; }
+    .profile-menu-identity small { color:#65758e; margin-top:4px; font-size:11px; }
+    .profile-menu-avatar-hint { display:block; margin:4px 0 11px 53px; padding:0; border:0; background:transparent; color:#65758e; font-size:10px; }
+    .profile-menu-avatar-hint:hover { color:var(--blue); text-decoration:underline; }
+    .profile-menu-phone { display:flex; align-items:center; justify-content:space-between; gap:8px; padding:10px 3px; border-top:1px solid var(--line); border-bottom:1px solid var(--line); font-size:11px; }
+    .profile-menu-phone span { color:#65758e; }
     .profile-menu-phone strong { font-size:11px; font-variant-numeric:tabular-nums; }
-    .profile-menu-action { display:flex; align-items:center; gap:10px; width:100%; padding:10px 7px; border:0; border-radius:7px; background:transparent; color:#f6f8fb; text-align:left; font-size:12px; }
+    .profile-menu-action { display:flex; align-items:center; gap:10px; width:100%; padding:10px 7px; border:0; border-radius:7px; background:transparent; color:var(--ink); text-align:left; font-size:12px; }
     .profile-menu-phone + .profile-menu-action { margin-top:7px; }
-    .profile-menu-action:hover,.profile-menu-action:focus-visible { outline:none; background:#334652; }
-    .profile-menu-action span { width:17px; text-align:center; color:#b6c6d2; font-size:17px; }
+    .profile-menu-action:hover,.profile-menu-action:focus-visible { background:var(--blue-soft); color:var(--blue); }
+    .profile-menu-action:focus-visible,.profile-menu-avatar-hint:focus-visible { outline:2px solid var(--blue); outline-offset:2px; }
+    .profile-menu-action span { width:17px; text-align:center; color:var(--blue); font-size:17px; }
     .profile-form label { display:block; margin:12px 0 5px; font-size:12px; font-weight:700; }
     .profile-form label:first-child { margin-top:0; }
     .modal .profile-form-error { min-height:17px; margin:8px 0 0; color:#c73e41; font-size:11px; }
@@ -496,6 +498,15 @@
 .catalog-section-head { display:flex; justify-content:space-between; align-items:center; }
 #catalog-sku-editor h3 { margin:16px 0 8px; font-size:14px; }
 #catalog-editor select.field { width:100%; }
+.faq-variants-editor { border-top:1px solid #e4ebf5; }
+.faq-variants-heading { display:flex; align-items:center; gap:8px; color:#243650; }
+.faq-variants-heading .knowledge-count { margin-left:auto; }
+.faq-variant-row { margin:10px 0; padding:10px; border:1px solid #e4ebf5; border-radius:8px; }
+.faq-variant-row.selected { border-color:#a9bfff; background:#f7f9ff; }
+.faq-variant-text { display:block; white-space:pre-wrap; overflow-wrap:anywhere; color:#243650; font-size:12px; line-height:1.6; }
+.faq-variant-meta { display:flex; align-items:center; flex-wrap:wrap; gap:8px; margin-top:7px; color:#8390a2; font-size:10px; }
+.faq-variants-editor .field { width:100%; }
+#faq-variant-form { margin-top:10px; }
 #catalog-editor .knowledge-form-fields > .btn { margin-top:10px; }
 #catalog-editor .table th, #catalog-editor .table td { padding:10px 6px; }
 @media (max-width:480px) { .catalog-attribute-row { flex-wrap:wrap; } .catalog-attribute-row [data-key] { flex-basis:100%; } }

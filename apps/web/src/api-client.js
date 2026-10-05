@@ -139,6 +139,13 @@
     createCatalogSku: (tenantId, id, body) => request(`/knowledge/spus/${encodeURIComponent(id)}/skus`, { method: 'POST', tenantId, body }),
     updateCatalogSku: (tenantId, id, body) => request(`/knowledge/skus/${encodeURIComponent(id)}`, { method: 'PATCH', tenantId, body }),
     knowledgeFaqs: tenantId => request('/knowledge/faqs', { tenantId }),
+    faqVariants: (tenantId, faqId) => request(`/knowledge/faqs/${encodeURIComponent(faqId)}/variants`, { tenantId }),
+    createFaqVariant: (tenantId, faqId, input) => request(`/knowledge/faqs/${encodeURIComponent(faqId)}/variants`, {
+      method: 'POST', tenantId, body: input,
+    }),
+    updateFaqVariant: (tenantId, id, patch) => request(`/knowledge/faq-variants/${encodeURIComponent(id)}`, {
+      method: 'PATCH', tenantId, body: patch,
+    }),
     knowledgeShortcuts: tenantId => request('/knowledge/shortcuts', { tenantId }),
     createKnowledgeProduct: (tenantId, input) => request('/knowledge/products', {
       method: 'POST', tenantId, body: input,

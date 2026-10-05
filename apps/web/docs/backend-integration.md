@@ -45,6 +45,7 @@
 | 智能辅助 | 获取最多 3 条候选及来源 | `POST /retrieval/suggestions`、`GET /retrieval/suggestions/:id` | provider、候选集合 ID、来源 ID、内容、评分、降级原因；人工确认后发送。 |
 | 商品库 | Excel/CSV 导入、清洗错误、异步索引进度 | 路径待确认 | SPU、SKU、类目扩展属性、商品链接、`snapshot_at`、导入任务和索引状态。价格与库存仅作快照展示。 |
 | 统一知识库 | 商品、FAQ、公司快捷话术的列表、创建、编辑和启停 | 已接 `/api/v1/knowledge/products`、`/faqs`、`/shortcuts` 的 GET / POST / PATCH | 平台管理员请求带 `x-tenant-id`；商品和 FAQ 新增带默认 `storeId`，公司话术新增传 `storeId: null`。客服可读但写入由后端返回 403；管理员写入仍由服务端 `requireConfigurator` 校验。 |
+| FAQ 近似问法 | 查询、新增、修改文字、启停 | 已接 GET / POST `/api/v1/knowledge/faqs/:faqId/variants`；PATCH `/api/v1/knowledge/faq-variants/:variantId` | 近似问法继承父 FAQ 公司 / 门店，带 Bearer 及 `x-tenant-id`；创建传 questionText / source: manual，修改传 questionText / status。客服只读，写权限由服务端确认。 |
 | 统一知识库 | SPU / SKU 详细维护 | 已接 `GET /knowledge/spus`、`GET /knowledge/spus/:id`、`POST /knowledge/spus`、`PATCH /knowledge/spus/:id`、`POST /knowledge/spus/:id/skus`、`PATCH /knowledge/skus/:id`；分类 `GET /knowledge/categories` | 请求带 Bearer 和 `x-tenant-id`；列表按服务端授权返回。详情为 `{spu, skus}`。SPU 创建必填 `storeId/productCode/title`；修改仅提交可变字段。SKU 从所属 SPU 继承门店，前端不指定归属。 |
 | 统一知识库 | 商品 CSV / XLSX 导入预览与应用 | 已接 `POST /api/v1/knowledge/import-batches/preview`、`/apply` | `multipart/form-data` 字段为 `file`、`storeId`；先展示总行数、可导入行和错误，再由管理员确认应用。 |
 | 统一知识库 | 页面内回答测试 | 前端快速匹配，正式召回待接 | 当前从已读取的启用商品、FAQ 和公司快捷话术中展示前三条匹配；正式版本应调用检索接口并返回相关性、来源切片和未命中原因。 |
@@ -110,3 +111,11 @@
 - 鉴权 REST 请求返回 401 时，API 适配清除令牌并发送本页 `kefu:session-expired` 事件；密码登录失败的 401 不触发已登录会话失效事件。SSE unauthorized 同样清除前端身份并返回登录。
 - 退出立即清除 UI 会话及旧知识数据，角色显示未登录；后台撤销请求结束前禁用新登录，避免旧请求清除新令牌。公司范围和 SPU / SKU 数据不跨账号复用，迟到结果不更新已退出页面。
 - 管理员可写需要真实已连接会话及后端角色；UI 角色下拉不提供模拟提权。真实管理员登录 / 退出 / 再登录验证通过，12 项前端回归测试及 10 个脚本语法检查通过；实际商品写入持久化验证限制不变。
+
+## 2026-10-04：FAQ 近似问法维护契约
+
+- `src/faq-variants.js` 在常见问题右侧详情下方渲染编辑器；FAQ 未保存前不创建问法，防止临时前端 ID 写入。查看或保存标准 FAQ 后按其真实 ID 读取列表，可手动刷新。
+- GET 返回 `id/tenantId/faqId/questionText/source/status/updatedAt/createdAt`；来源 manual / generated / imported 分别显示人工录入 / 自动生成 / 导入。启用及总数量只统计本次成功读取的当前 FAQ，不推断其他 FAQ 的数量。
+- POST 发送 `{questionText, source: 'manual'}`，新增状态由服务端默认 enabled；PATCH 发送 `{questionText, status}`，status 为 enabled / disabled。近似问法共用标准答案，不能单独修改答案、归属、来源和父 FAQ；停用可逆，没有删除接口或按钮。编辑器文字限制 1–300 字，失败保留草稿及错误信息。
+- 全部请求使用当前登录 Bearer 和明确的 `x-tenant-id`。服务端 `requireFaq` 校验父 FAQ 租户及门店，写操作 `requireConfigurator` 限制 merchant_admin / platform_admin。接口未提供 state_version / Idempotency-Key，本前端不虚构此契约；提交期间禁用按钮只能阻止本页重复点击，不能提供并发写保护。
+- FAQ、页签或账号变化会丢弃旧编辑器与迟到结果；退出 / REST 401 同样清除。18 项前端回归（含 6 项新增问法测试）与 11 个脚本语法检查通过；真实管理员入口、客服只读与退出清理通过。实际公司 FAQ 列表为空，未创建测试业务数据，数据库写入持久化及真实召回命中仍待验证。本地“回答测试”仍按既有字符匹配，不因本轮问法维护接通而变成后端语义检索。

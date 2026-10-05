@@ -332,3 +332,18 @@ npm run db:seed        # 幂等写入开发种子数据（目录 fixtures + 本�
 products/faqs/shortcuts、suggestion_sets、review_policy/approved_phrases、audit_log、
 retention_policies）；同一文件还建了 `jobs` 表，但内存 KefuStore 没有对应实现，
 该表目前无写入方。MVP 以内存 KefuStore 为运行时实现，PostgreSQL 用于后续持久化接入。
+
+## 本地工作台演示会话
+
+`database/scripts/seed-workspace-demo.cjs` 可补入 4 条处理中、1 条已结束的演示会话、21 条消息和 6 条预置分配记录，让登录后的工作台通过真实 API 展示界面。数据属于云集服饰旗舰店，分配给客服小蓝（账号 `agent01`）；管理员也可查看。标题带“（演示）”，首条消息标注非真实客户，固定 ID 前缀为 `demo-workspace-v1-`。
+
+```powershell
+node database/scripts/seed-workspace-demo.cjs          # 仅预览
+node database/scripts/seed-workspace-demo.cjs --apply  # 写入演示数据
+```
+
+仅允许 `APP_ENV=local` 和本机 PostgreSQL。写入在单个事务中完成；再次执行跳过已有演示会话，保留用户后续回复、转接和结束，不覆盖真实数据或账号配置。脚本不改变前后端业务代码、数据库结构或渠道配置。
+
+写入后刷新网页，使用 `agent01 / Agent123456` 登录并选择“公司全部门店”或“云集服饰旗舰店”；点击会话读取聊天详情。“已结束”页签中的条目只读。候选回复从现有商品资料检索，当前未配置生成模型及可用语义检索时会显示关键词检索降级原因。
+
+此脚本只建立历史记录，不创建渠道回调、发送窗口、外发任务或虚假的在线员工。当前没有演示客户的发送窗口，不能据此验证真实微信发送；转接需另一个符合服务端条件的在线客服。预置分配历史也不代表已经验证自动派单或转接执行。工作台外发额度提醒、客户信息及部分指标仍有原型固定内容，应以服务端事实为准。本地数据库数据不随 Git 提交上传，可在其他本地环境运行脚本重新创建。

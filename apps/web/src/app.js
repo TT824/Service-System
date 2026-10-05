@@ -318,6 +318,7 @@
     knowledgeEpoch++;knowledgeLoaded=false;knowledgeLoading=false;knowledgeScope=null;knowledgeEditingId=null;
     Object.values(knowledgeState).forEach(items=>items.splice(0));
     window.KefuCatalog?.reset();
+    window.KefuFaqVariants?.reset();
     el('knowledge-form').reset();el('knowledge-list').innerHTML='';el('knowledge-count').textContent='—';
     el('knowledge-test-result').textContent='';el('knowledge-scope-note').textContent='请登录后查看知识库';
   }
@@ -1108,6 +1109,10 @@
     el('knowledge-list').querySelectorAll('[data-knowledge-toggle]').forEach(button=>button.onclick=()=>toggleKnowledgeItem(button.dataset.knowledgeToggle,button));
   }
   function configureKnowledgeForm(){
+    if(knowledgeTab==='faqs'){
+      const session=backendSession,epoch=knowledgeEpoch,faqId=knowledgeEditingId;
+      window.KefuFaqVariants?.render({api,scope:ensureKnowledgeScope,canWrite:canWriteKnowledge,session,faq:knowledgeState.faqs.find(item=>item.id===faqId)||null,active:()=>knowledgeTab==='faqs'&&knowledgeEditingId===faqId&&backendConnected&&backendSession===session&&knowledgeEpoch===epoch,notify:toast});
+    }else window.KefuFaqVariants?.reset();
     el('knowledge-form').hidden=knowledgeTab==='catalog';
     el('catalog-editor').hidden=knowledgeTab!=='catalog';
     if(knowledgeTab==='catalog')return;

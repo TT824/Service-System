@@ -6,6 +6,7 @@ const files = [
   'src/realtime.js',
   'src/exports.js',
   'src/catalog.js',
+  'src/faq-variants.js',
   'src/load-pages.js',
   'src/mock-data.js',
   'src/admin-data.js',

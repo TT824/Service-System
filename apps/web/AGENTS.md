@@ -16,6 +16,7 @@
 | `src/mock-data.js` | 演示客服会话、内部群聊和候选回复；正式接入时改用 API 数据。 |
 | `src/app.js` | 页面切换与交互控制；关键后端对接点有 `TODO(API)` 注释。 |
 | `src/catalog.js` | 结构化 SPU / SKU 的真实接口维护、公共属性与规格行编辑；客服只读，管理员可写。 |
+| `src/faq-variants.js` | FAQ 近似问法的查询、新增、编辑与启停；继承 FAQ 范围，管理员维护、客服只读，隔离迟到请求。 |
 | `src/realtime.js` | Bearer 鉴权 SSE、断线重连、静默超时与定期重新鉴权；事件触发工作台 REST 补读。 |
 | `src/admin-data.js`、`src/admin.js` | 企业管理员中心演示数据与界面交互：周期统计、员工对比、权限、分流资格、脱敏聊天记录和操作日志。 |
 | `docs/backend-integration.md` | 页面所需数据、建议接口、状态与对接约束。 |
