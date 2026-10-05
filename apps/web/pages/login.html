@@ -30,7 +30,22 @@
         欢迎回来
       </div>
       <input class="field" id="auth-username" placeholder="账号" autocomplete="username" value="agent01">
-      <input class="field" id="auth-secret" type="password" placeholder="密码" style="margin-top:10px">
+      <!-- 密码显隐按钮常驻：同一位置、同一外观始终在位，只有当前字段不是密码时才隐藏。
+           浏览器的原生“眼睛”只在有内容或聚焦时出现，时有时无，所以这里不再依赖它。 -->
+      <div class="field-wrap" style="margin-top:10px">
+        <input class="field" id="auth-secret" type="password" placeholder="密码">
+        <button type="button" class="field-reveal" id="auth-secret-toggle" aria-pressed="false" aria-controls="auth-secret" aria-label="显示密码" title="显示密码">
+          <svg class="icon-eye" viewBox="0 0 20 20" aria-hidden="true" focusable="false">
+            <path d="M2.6 10S6.1 5 10 5s7.4 5 7.4 5-3.5 5-7.4 5S2.6 10 2.6 10Z"/>
+            <circle cx="10" cy="10" r="2.3"/>
+          </svg>
+          <svg class="icon-eye-off" viewBox="0 0 20 20" aria-hidden="true" focusable="false">
+            <path d="M2.6 10S6.1 5 10 5s7.4 5 7.4 5-3.5 5-7.4 5S2.6 10 2.6 10Z"/>
+            <circle cx="10" cy="10" r="2.3"/>
+            <path d="M3.4 3.4l13.2 13.2"/>
+          </svg>
+        </button>
+      </div>
       <button class="btn primary" id="auth-submit" style="width:100%;margin-top:17px;padding:10px">
         登录
       </button>

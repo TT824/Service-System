@@ -36,6 +36,7 @@ import type {
   CategoryAttribute,
   Conversation,
   ConversationAssignment,
+  ConversationIntent,
   DispatchOutcome,
   FaqItem,
   FaqItemPatch,
@@ -73,6 +74,7 @@ import type {
   Store,
   StoreConversationResult,
   SuggestionCandidate,
+  SuggestionOrigin,
   SuggestionProvider,
   SuggestionSet,
   TakeoverAuthority,
@@ -163,6 +165,22 @@ export type CreateSuggestionSetRecord = {
    * tell. `'none'` is a caller's explicit claim, not a fallback.
    */
   readonly provider: SuggestionProvider;
+  /**
+   * What the message was read as — see {@link ConversationIntent}.
+   *
+   * Required for the same reason `provider` is: a writer that omitted it would
+   * store a chitchat set as if it had been searched for, and the empty
+   * `candidates` would then read as a failure instead of the decision it was.
+   */
+  readonly intent: ConversationIntent;
+  /**
+   * What the candidates are — see {@link SuggestionOrigin}.
+   *
+   * Required and not derived from `provider`: a 话术库 hit is stored with
+   * `provider: 'none'` on purpose, and only this field says the set was
+   * deliberate rather than merely ungenerated.
+   */
+  readonly origin: SuggestionOrigin;
   readonly candidates: ReadonlyArray<SuggestionCandidate>;
   readonly fallbackReasons: ReadonlyArray<string>;
   readonly now?: string;

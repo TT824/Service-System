@@ -27,6 +27,7 @@ import {
   ConversationsService,
   type ConversationDetail,
   type ConversationPoolEntry,
+  type TransferTarget,
 } from './conversations.service';
 
 /** Conversation workspace endpoints. */
@@ -112,6 +113,22 @@ export class ConversationsController {
     const tenantId = await this.access.resolveTenantScope(req, member);
     const expectedVersion = this.versionFromBody(body);
     return this.conversations.returnToPool(tenantId, conversationId, member, expectedVersion);
+  }
+
+  /**
+   * The seats this conversation may be transferred to right now.
+   *
+   * Read-only, and answered by the transfer route's own eligibility rule, so the
+   * picker cannot offer a colleague the transfer would refuse.
+   */
+  @Get(':conversationId/transfer-targets')
+  async transferTargets(
+    @Req() req: Request,
+    @Param('conversationId') conversationId: string,
+  ): Promise<ReadonlyArray<TransferTarget>> {
+    const member = this.access.resolveMember(req);
+    const tenantId = await this.access.resolveTenantScope(req, member);
+    return this.conversations.transferTargets(tenantId, conversationId, member);
   }
 
   /** Transfer a claimed conversation to another member. */

@@ -2017,6 +2017,11 @@ export class KefuStore {
     readonly storeId: string;
     readonly conversationId: string;
     readonly provider: SuggestionProvider;
+    // Named through the set's own fields rather than by a second import of the
+    // same two unions: this input has to stay exactly what a set carries, and the
+    // in-memory store is the adapter most likely to drift from it unnoticed.
+    readonly intent: SuggestionSet['intent'];
+    readonly origin: SuggestionSet['origin'];
     readonly candidates: ReadonlyArray<SuggestionCandidate>;
     readonly fallbackReasons: ReadonlyArray<string>;
     readonly now?: string;
@@ -2028,6 +2033,8 @@ export class KefuStore {
       storeId: input.storeId,
       conversationId: input.conversationId,
       provider: input.provider,
+      intent: input.intent,
+      origin: input.origin,
       candidates: Object.freeze([...input.candidates]),
       fallbackReasons: Object.freeze([...input.fallbackReasons]),
       createdAt: now,

@@ -9,6 +9,8 @@
     "status": "node scripts/migrate.cjs status",
     "check": "node scripts/check.cjs",
     "seed": "node scripts/seed.cjs",
+    "seed:demo": "node scripts/seed-demo-conversations.cjs",
+    "seed:demo:knowledge": "node scripts/seed-demo-knowledge.cjs",
     "prune": "node scripts/prune.cjs",
     "clean": "node -e \"require('node:fs').rmSync('dist',{recursive:true,force:true})\"",
     "create-account": "node scripts/create-account.cjs"

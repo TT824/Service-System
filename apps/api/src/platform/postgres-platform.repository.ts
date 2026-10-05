@@ -71,6 +71,7 @@ import {
   type CatalogAttributeValueType,
   type Conversation,
   type ConversationAssignment,
+  type ConversationIntent,
   type ConversationTransition,
   type DispatchOutcome,
   type FaqItem,
@@ -123,7 +124,9 @@ import {
   type StoreConversationResult,
   type TakeoverAuthority,
   type SuggestionCandidate,
+  type SuggestionOrigin,
   type SuggestionProvider,
+  type SuggestionRecallEvidence,
   type SuggestionSet,
   type Tenant,
   type VariantAttributes,
@@ -2064,8 +2067,8 @@ export class PostgresPlatformRepository implements PlatformRepository {
       const rows = (
         await this.statement(
           client,
-          `INSERT INTO suggestion_sets (id, tenant_id, store_id, conversation_id, provider, candidates, fallback_reasons, created_at)
-           VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7::jsonb, $8)
+          `INSERT INTO suggestion_sets (id, tenant_id, store_id, conversation_id, provider, intent, origin, candidates, fallback_reasons, created_at)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9::jsonb, $10)
            RETURNING *`,
           [
             id,
@@ -2073,6 +2076,8 @@ export class PostgresPlatformRepository implements PlatformRepository {
             input.storeId,
             input.conversationId,
             input.provider,
+            input.intent,
+            input.origin,
             JSON.stringify(input.candidates),
             JSON.stringify(input.fallbackReasons),
             now,
@@ -3173,6 +3178,7 @@ function toMessage(row: QueryResultRow): Message {
 }
 
 function toSuggestionCandidate(entry: Record<string, unknown>): SuggestionCandidate {
+  const recall = toSuggestionRecall(entry['recall']);
   return {
     rank: toNumber(entry['rank']),
     kind: toText(entry['kind']) as SuggestionCandidate['kind'],
@@ -3182,7 +3188,32 @@ function toSuggestionCandidate(entry: Record<string, unknown>): SuggestionCandid
     title: toText(entry['title']),
     content: toText(entry['content']),
     score: toNumber(entry['score']),
+    // Absent stays absent: the legacy products read never had a rank, and
+    // inventing one here would put 检索依据 on a candidate the recall never saw.
+    ...(recall === undefined ? {} : { recall }),
   };
+}
+
+/**
+ * The recall evidence one candidate's JSONB may carry, or `undefined`.
+ *
+ * Lenient in one direction on purpose. A candidate written before the engine
+ * carried this field has none and gets none — absent is a fact about that row,
+ * not a value to repair. A `modes` array that *is* present is read as strings
+ * rather than re-validated against the legs' own vocabulary: the leg names live
+ * in the retrieval layer, and this value is evidence a human reads, never an
+ * input a decision is made from.
+ */
+function toSuggestionRecall(value: unknown): SuggestionRecallEvidence | undefined {
+  if (typeof value !== 'object' || value === null) {
+    return undefined;
+  }
+  const record = value as Record<string, unknown>;
+  const rank = record['rank'];
+  if (typeof rank !== 'number') {
+    return undefined;
+  }
+  return { rank, modes: toStringArray(record['modes']) };
 }
 
 /**
@@ -3203,6 +3234,30 @@ function toSuggestionProvider(value: unknown): SuggestionProvider {
   throw new Error(`suggestion provider ${provider} is not one of the providers a set records`);
 }
 
+/**
+ * The intent out of one row, with the closed set re-checked on the way out.
+ *
+ * The CHECK constraint already refuses anything else on the way in; this is the
+ * same statement made to the reader instead of to the database, and it is not
+ * redundant — `INSERT ... RETURNING *` also passes through here, and a mapper
+ * that trusted the column would hand a typo to callers as a value TypeScript
+ * swears is one of two strings.
+ */
+function toSuggestionIntent(value: unknown): ConversationIntent {
+  if (value === 'chitchat' || value === 'question') {
+    return value;
+  }
+  throw new Error(`suggestion intent ${String(value)} is not one of the two readings a set records`);
+}
+
+/** The origin out of one row, re-checked for the reason {@link toSuggestionIntent} is. */
+function toSuggestionOrigin(value: unknown): SuggestionOrigin {
+  if (value === 'script' || value === 'catalogue' || value === 'generated' || value === 'none') {
+    return value;
+  }
+  throw new Error(`suggestion origin ${String(value)} is not one of the origins a set records`);
+}
+
 function toSuggestionSet(row: QueryResultRow): SuggestionSet {
   return {
     id: toText(row['id']),
@@ -3210,6 +3265,8 @@ function toSuggestionSet(row: QueryResultRow): SuggestionSet {
     storeId: toText(row['store_id']),
     conversationId: toText(row['conversation_id']),
     provider: toSuggestionProvider(row['provider']),
+    intent: toSuggestionIntent(row['intent']),
+    origin: toSuggestionOrigin(row['origin']),
     candidates: Object.freeze(toRecordArray(row['candidates']).map(toSuggestionCandidate)),
     fallbackReasons: Object.freeze(toStringArray(row['fallback_reasons'])),
     createdAt: toIso(row['created_at']),

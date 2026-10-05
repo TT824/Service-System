@@ -11,6 +11,7 @@
 - `GET /api/v1/conversations`、`GET /api/v1/conversations/:conversationId`。
 - `POST /api/v1/conversations/:conversationId/messages`，请求字段为 `content`、`source`、`dedupKey`。
 - `POST /api/v1/conversations/:conversationId/close`，并传 `expectedVersion`。
+- `GET /api/v1/conversations/:conversationId/transfer-targets` 与 `POST /api/v1/conversations/:conversationId/transfer`；转交名单由服务端给出，前端只渲染。
 - `GET /api/v1/directory/tenants`，用于平台管理员选择单公司业务范围和默认门店。
 - `GET/POST/PATCH /api/v1/knowledge/products`、`/knowledge/faqs`、`/knowledge/shortcuts`；所有成员可读，只有管理员可写。
 - `POST /api/v1/knowledge/import-batches/preview` 与 `/apply`；使用 `multipart/form-data` 上传 CSV / XLSX，先预览再应用。
@@ -35,14 +36,16 @@
 | 工作台顶部 | 客服接待状态、AI 辅助开关、退出账号 | 路径待确认 | 在线 / 挂起 / 离线；只有在线参与自动派单。挂起保留当前会话但不接新单，离线停止客服消息发送。退出是独立的登出操作，不应作为接待状态提交。关闭 AI 辅助只暂停候选生成，消息接入与人工回复继续可用。状态操作需返回服务端实际保存结果。 |
 | 工作台顶部 | 今日接待与展开指标 | 路径待确认 | 按当前租户、授权店铺、客服和日期返回指标值、统计时间与可用状态。未接入的订单、满意度、转化指标返回不可用状态，前端显示「—」，不得生成假数值。首响、采纳率和手打率使用需求文档中的口径。 |
 | 左侧联系人 | 查询团队成员、可见买家、分组与黑名单 | 路径待确认 | 按当前租户和授权店铺返回联系人 ID、脱敏显示名、类型、分组 ID、在线状态与可访问会话 ID；支持搜索和分页。团队成员与买家联系人不得混用身份标识。 |
-| 左侧联系人 | 新建分组、调整联系人分组 | 路径待确认 | 变更由服务端校验角色和租户范围，返回分组 ID、版本与更新结果；当前原型只修改浏览器内存。黑名单操作在权限与规则明确前不开放。 |
-| 内部群聊 | 群列表、按名称或成员搜索、新建群、群成员与历史消息、发送消息 | 路径待确认 | 群 ID、租户 ID、成员 ID、消息 ID、发送人、时间、游标与发送状态；创建和发送由服务端校验成员资格与租户范围，实时事件推送新消息。当前仅为本地演示，不能复用微信客服外发接口。 |
-| 会话列表 | 查询当前客服的处理中 / 已结束会话 | 路径待确认 | `conversation_id`、`store_id`、买家脱敏显示名、最近消息、未读数、`state`、`state_version`、接待客服、`ended_at`；“我的会话”下按 active / ended 分类，返回独立计数和分页。结束成功后从处理中移入已结束并保留历史消息；已结束仅可读，服务端同时禁止发送 / 转接。买家联系人可进入对应分类的会话。 |
+| 左侧联系人 | 新建分组、调整联系人分组 | 路径待确认 | 变更由服务端校验角色和租户范围，返回分组 ID、版本与更新结果；当前原型只修改浏览器内存。分组维护是管理动作：普通客服只读，服务端必须按角色拒绝越权请求，前端隐藏「＋ 新建分组」与行内「⋯」只改善体验。黑名单操作在权限与规则明确前不开放。 |
+| 左侧联系人 | 从团队成员进入一对一内部会话 | 路径待确认 | 按联系人返回与其的内部会话 ID、最后一条消息摘要与时间，供列表显示和当前会话高亮；无历史时返回空会话而不是 404，前端显示空态。不能把同事联系人与买家联系人混用身份标识，也不能复用客户会话接口。 |
+| 内部协作 | 群聊：按名称或成员搜索、新建群、群成员与历史消息、发送消息；同事一对一：会话与消息历史、发送消息 | 路径待确认 | 群 / 一对一共用会话与消息模型，用会话类型区分；返回会话 ID、租户 ID、成员 ID、消息 ID、发送人、时间、游标与发送状态。创建和发送由服务端校验成员资格与租户范围，实时事件推送新消息。新建群属于目录维护动作，按角色校验。当前仅为本地演示，不能复用微信客服外发接口或额度。 |
+| 会话列表 | 查询当前客服的处理中 / 已结束会话 | 路径待确认 | `conversation_id`、`store_id`、买家脱敏显示名、最近消息、未读数、`state`、`state_version`、接待客服、`ended_at`；“我的会话”下按 active / ended 分类，返回独立计数和分页。结束成功后从处理中移入已结束并保留历史消息；已结束仅可读，服务端同时禁止发送 / 转接。买家联系人可进入对应分类的会话：前端按联系人上记录的会话 ID 查找，查不到时按客户显示名兜底，都没有则提示“当前没有可打开的会话”。正式版本应由联系人接口直接返回可打开的会话 ID（或返回空），前端不再依赖姓名匹配。 |
 | 会话分配 | 系统自动分配并通知目标客服 | 路径待确认 | 服务端按在线状态、店铺范围等规则选择客服，并推送分配事件；前端收到事件后刷新“我的会话”，不提供抢单或退池入口。若暂时无人在线，由服务端等待并在可分配时重试。 |
-| 会话操作 | 转指定客服、结束 | 路径待确认 | 传 `state_version`；转接目标必须在当前授权店铺且在线。 |
+| 外发提醒 | 会话详情里的 48 小时回复窗口与剩余外发额度 | 已接 `GET /api/v1/conversations/:conversationId` 的 `replyWindow` | 字段为 `open`、`windowStartedAt`、`windowEndsAt`、`messageLimit`、`remaining`、`refusal`。窗口由客户最近一条入向消息开启（48 小时、最多 5 条），因此按**客户**而不是会话存在：同一位客户换一条会话，读到的仍是同一个窗口。`refusal` 区分三种「不能发」——`window_missing`（客户还没发过消息）、`window_expired`（窗口已关闭）、`quota_exceeded`（本窗口额度用尽），界面据此给出不同说明，并且与 Worker 拒收外发时用的是同一个判据，所以提醒不会承诺一条平台会拒绝的消息。窗口已关闭或额度用尽时前端拦下提交只改善体验，最终判定仍在服务端，被拒时会记录可见的降级原因。 |
+| 会话操作 | 转指定客服、结束 | 已接 `GET /api/v1/conversations/:conversationId/transfer-targets`、`POST /api/v1/conversations/:conversationId/transfer`、`POST /api/v1/conversations/:conversationId/close` | 转交与结束都传 `expectedVersion`；转交另传 `toMemberId`。可转交名单由服务端返回（`memberId`、`displayName`、`storeId`、`availability`、`inProgressCount`），判定与转交路由同源：同租户、在线且可接单、排除自己，因此前端不复刻规则，也不会给出「能选但必被拒」的选项。入口是否出现读会话详情的 `canTakeOver` 与接待人字段（本人接待、或接手人已下线可由管理员 / 同店铺坐席接手），仅收口体验，不承担鉴权。名单为空与「会话不存在」「版本冲突」是三种不同结果：空名单返回空数组并提示“当前没有在线且可接单的同事”，未知会话返回 404，并发冲突返回 409 并需刷新会话。 |
 | 对话区 | 拉取消息、查询外发状态 | 路径待确认 | `message_id`、方向、类型、正文/媒体引用、文件名、大小、时间、`message_source`、发送状态。图片、视频和文件按类型展示；媒体不可用时显示占位或失败原因。 |
 | 回复栏 | 发送最终文本 / 图片 / 视频 / 文件 / 商品 link | `POST /api/v1/messages/send` 文档已指定 | 客服选中候选后回填并可编辑。传候选 ID、最终文本、会话 ID、媒体 ID、幂等键；服务端判定 `direct_candidate` / `edited_send` / `manual_typed` 等来源。视频 / 文件的渠道支持、大小及类型需后端确认。 |
-| 智能辅助 | 获取最多 3 条候选及来源 | 路径待确认 | 候选 ID、文本、商品/FAQ/话术来源切片、检索关键词与分数、生成/降级状态、批次 ID。无可靠命中时显示人工处理提示。 |
+| 智能辅助 | 获取最多 3 条候选及来源 | `POST /api/v1/retrieval/suggestions`（建）+ `GET /api/v1/retrieval/suggestions/{id}`（读） | 请求体 `{conversationId, query?}`：`query` 是坐席重新提问时给的文字，缺省则取该会话最后一条客户文本。返回一整个 suggestion set：`id`、`intent`（`question`\|`chitchat`）、`origin`（`script`\|`catalogue`\|`generated`\|`none`）、`provider`（`none`\|`deepseek`）、`candidates[]`（`rank`、`kind`（`faq`\|`shortcut`\|`product`）、`sourceId`、`title`、`content`、`score`、`recall{rank,modes}`）与 `fallbackReasons[]`。**意图和来源都由服务端定，前端只渲染**：`chitchat` 一定 `candidates: []` + `chitchat_no_retrieval`；话术库命中即直出店铺原句、不调用模型（`provider: none`，`origin: script`）。 |
 | 商品库 | Excel/CSV 导入、清洗错误、异步索引进度 | 路径待确认 | SPU、SKU、类目扩展属性、商品链接、`snapshot_at`、导入任务和索引状态。价格与库存仅作快照展示。 |
 | 统一知识库 | 商品、FAQ、公司快捷话术的列表、创建、编辑和启停 | 已接 `/api/v1/knowledge/products`、`/faqs`、`/shortcuts` 的 GET / POST / PATCH | 平台管理员请求带 `x-tenant-id`；商品和 FAQ 新增带默认 `storeId`，公司话术新增传 `storeId: null`。客服可读但写入由后端返回 403；管理员写入仍由服务端 `requireConfigurator` 校验。 |
 | 统一知识库 | 商品 CSV / XLSX 导入预览与应用 | 已接 `POST /api/v1/knowledge/import-batches/preview`、`/apply` | `multipart/form-data` 字段为 `file`、`storeId`；先展示总行数、可导入行和错误，再由管理员确认应用。 |
@@ -69,6 +72,8 @@
 4. 外发额度接近上限、窗口到期或渠道失败：提示客服并显示每条消息最终发送状态。
 5. 自动分配或转接后会话归属变化：通过实时事件刷新当前客服的会话列表；结束操作遇到版本冲突时刷新状态。
 6. 图片、视频或文件拉取 / 上传失败：保留消息占位与人工回复能力。
+
+智能辅助的降级原因由服务端写进 `fallbackReasons`，前端只把稳定码翻译成坐席能读懂的一句话，不在浏览器里推断：`chitchat_no_retrieval`（闲聊未检索）、`no_generation_provider`（未配置生成模型）、`generation_unavailable`（模型调用失败）、`semantic_recall_unavailable`（向量检索未运行）、`no_knowledge_match`（话术库与商品库都没命中）、`empty_query`（客户消息没有可检索文字，如语音/图片）、`content_blocked`（候选命中违禁词被拦截）。新增原因码时前端要同步补文案，否则面板只能把原始码摆给坐席看。
 
 ## 当前原型与正式版本的区别
 

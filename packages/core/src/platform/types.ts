@@ -322,6 +322,45 @@ export type ShortcutPatch = {
   readonly enabled?: boolean;
 };
 
+/**
+ * How the assist panel treats one customer message.
+ *
+ * `question` is retrieved for; `chitchat` is not. The rule that decides between
+ * them is `platform/intent.ts` — this is only the shape, kept here so a
+ * persisted suggestion set can carry it without the kernel's types importing a
+ * classifier.
+ */
+export type ConversationIntent = 'chitchat' | 'question';
+
+/**
+ * Where a set's candidates came from, as one fact the console can render.
+ *
+ * `script` — the store's own 话术库 (a shortcut or a FAQ) answered, and no model
+ * was asked: the retrieval-first rule. `catalogue` — the 商品库 answered and no
+ * model wrote anything, because none is configured or none delivered. `generated`
+ * — a configured provider wrote the text, anchored to knowledge it was given.
+ * `none` — there are no candidates: a chitchat message, an empty question, or a
+ * question nothing matched.
+ *
+ * Kept separate from {@link SuggestionSet.provider} on purpose. `provider` says
+ * *who was capable of writing* the text; this says *what the panel is actually
+ * showing* — and the two differ exactly in the case the retrieval-first rule
+ * creates, where a provider is configured and was deliberately not called.
+ */
+export type SuggestionOrigin = 'script' | 'catalogue' | 'generated' | 'none';
+
+/**
+ * Where the retrieval layer placed one entry, for a candidate that carries it.
+ *
+ * `modes` is leg names rather than the retrieval layer's own enum so this file
+ * stays free of that dependency; the engine's richer alias lives in
+ * `platform/suggestion.ts`, and it is assignable to this one.
+ */
+export type SuggestionRecallEvidence = {
+  readonly rank: number;
+  readonly modes: ReadonlyArray<string>;
+};
+
 /** Knowledge source kinds a suggestion candidate can reference. */
 export type SuggestionSourceKind = KnowledgeKind;
 
@@ -335,6 +374,13 @@ export type SuggestionCandidate = {
   readonly title: string;
   readonly content: string;
   readonly score: number;
+  /**
+   * The fusion rank and legs that recalled this entry, or absent for one the
+   * recall never saw — the legacy products read, which bypasses the index. The
+   * console shows it as 检索依据; a candidate without it was matched by the
+   * engine's own lexical count and by nothing else.
+   */
+  readonly recall?: SuggestionRecallEvidence;
 };
 
 /**
@@ -357,6 +403,14 @@ export type SuggestionSet = {
   readonly storeId: string;
   readonly conversationId: string;
   readonly provider: SuggestionProvider;
+  /**
+   * What the message was read as. Persisted rather than recomputed because it
+   * explains the empty set: a `chitchat` set has no candidates *by design*, and
+   * without this field that is indistinguishable from a search that failed.
+   */
+  readonly intent: ConversationIntent;
+  /** Why this set holds what it holds; see {@link SuggestionOrigin}. */
+  readonly origin: SuggestionOrigin;
   readonly candidates: ReadonlyArray<SuggestionCandidate>;
   readonly fallbackReasons: ReadonlyArray<string>;
   readonly createdAt: string;
@@ -396,6 +450,16 @@ export const SUGGESTION_FALLBACK_REASONS = {
    * from a refused send, and two literals would eventually stop agreeing.
    */
   contentBlocked: 'content_blocked',
+  /**
+   * The message was classified `chitchat`, so nothing was retrieved and nothing
+   * was generated — see {@link ConversationIntent}.
+   *
+   * The one code in this list that is an outcome rather than a shortfall: no
+   * search failed, no provider was missing, and the panel is not starving for
+   * material. It is recorded because an empty candidate list still has to
+   * explain itself, and "闲聊，无需检索" is that explanation.
+   */
+  chitchatNoRetrieval: 'chitchat_no_retrieval',
 } as const;
 
 /** Platform-wide review policy. Only a platform super administrator may edit it. */

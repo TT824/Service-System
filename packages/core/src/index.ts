@@ -40,6 +40,7 @@ export * from './platform/knowledge-recall';
 export * from './platform/knowledge-tokenize';
 export * from './platform/catalog';
 export * from './platform/imports';
+export * from './platform/intent';
 export * from './platform/customer-directory';
 export * from './platform/export-job';
 export * from './platform/product-import-parser';

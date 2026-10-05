@@ -52,6 +52,13 @@ type PoolEntry = {
   firstResponseMs: number | null;
   audienceMemberIds: ReadonlyArray<string>;
 };
+type TransferTargetRow = {
+  memberId: string;
+  displayName: string;
+  storeId: string | null;
+  availability: string;
+  inProgressCount: number;
+};
 
 /**
  * Interface tests for agent availability and automatic assignment.
@@ -528,6 +535,53 @@ describe('Assignment (interface)', () => {
         .expect(409);
       expect((response.body as ErrorEnvelope).code).toBe('conflict');
       expect(store.getConversation(T1, CLAIMED)?.assignedMemberId).toBe(AGENT_1);
+    });
+
+    it('offers the transfer picker exactly the seats the transfer itself accepts', async () => {
+      // Two accepting seats, so the answer is narrowed by the rule rather than by
+      // availability alone: the caller's own seat is the one that must drop out.
+      expect(await setPresence(AGENT_1, 'accepting')).toBe(200);
+      expect(await setPresence(AGENT_2, 'accepting')).toBe(200);
+
+      const response = await request(app.getHttpServer())
+        .get(`/api/v1/conversations/${CLAIMED}/transfer-targets`)
+        .set('x-member-id', AGENT_1)
+        .expect(200);
+      const targets = (response.body as DataEnvelope).data as ReadonlyArray<TransferTargetRow>;
+      expect(targets.map((target) => target.memberId)).toEqual([AGENT_2]);
+      // Named, not an id: the picker renders this string, and a seat missing from
+      // the directory would otherwise be offered as `u-t1-agent-2`.
+      expect(targets[0]).toMatchObject({
+        displayName: '客服小蓝',
+        storeId: S1,
+        availability: 'accepting',
+        inProgressCount: 0,
+      });
+    });
+
+    it('leaves a seat out of the picker once a transfer to it would be refused', async () => {
+      expect(await setPresence(AGENT_1, 'accepting')).toBe(200);
+      expect(await setPresence(AGENT_2, 'away')).toBe(200);
+
+      const response = await request(app.getHttpServer())
+        .get(`/api/v1/conversations/${CLAIMED}/transfer-targets`)
+        .set('x-member-id', AGENT_1)
+        .expect(200);
+      // The refusal is the point, not the emptiness: the same request that
+      // returned one target returns none, without the picker holding a copy of
+      // the eligibility rule.
+      expect((response.body as DataEnvelope).data).toEqual([]);
+    });
+
+    it('answers 404 for a conversation that does not exist, rather than an empty picker', async () => {
+      // An unknown conversation and a conversation nobody can take both leave the
+      // picker empty; only the status separates "no such conversation" from
+      // "nobody available", and the workspace shows a different message for each.
+      const response = await request(app.getHttpServer())
+        .get('/api/v1/conversations/conversation-does-not-exist/transfer-targets')
+        .set('x-member-id', AGENT_1)
+        .expect(404);
+      expect((response.body as ErrorEnvelope).code).toBe('not_found');
     });
   });
 

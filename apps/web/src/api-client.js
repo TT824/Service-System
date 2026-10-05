@@ -124,17 +124,35 @@
     applyKnowledgeImport: (tenantId, storeId, file) => productImport(file, storeId, tenantId, 'apply'),
     conversations: () => request('/conversations'),
     conversation: id => request(`/conversations/${encodeURIComponent(id)}`),
-    sendMessage: (id, content, source) => request(`/conversations/${encodeURIComponent(id)}/messages`, {
+    sendMessage: (id, content, source, candidateId) => request(`/conversations/${encodeURIComponent(id)}/messages`, {
       method: 'POST',
       body: {
         content,
         source,
+        // 采纳来源：服务端用 candidateId 记住这条消息出自哪条候选（§4.8 的采纳率口径）。
+        // 只有确实从候选发出的消息才带，手打的消息不带，否则来源追溯会凭空多一条引用。
+        ...(candidateId ? { candidateId } : {}),
         dedupKey: `frontend-${id}-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
       },
     }),
+    // 候选回复由服务端一次算完：意图识别 → 话术库优先检索（命中就直出、不调用模型）→
+    // 未命中才检索商品库并由大模型生成。前端不复刻这条链路，只渲染服务端写下来的
+    // intent / origin / fallbackReasons，因为它们才是「为什么没有候选」的答案。
+    suggest: (conversationId, query) => request('/retrieval/suggestions', {
+      method: 'POST',
+      body: { conversationId, ...(query ? { query } : {}) },
+    }),
+    suggestionSet: id => request(`/retrieval/suggestions/${encodeURIComponent(id)}`),
     closeConversation: (id, version) => request(`/conversations/${encodeURIComponent(id)}/close`, {
       method: 'POST',
       body: { expectedVersion: version },
+    }),
+    // 可转交对象由服务端按转交路由自己的判定返回，前端只负责渲染：
+    // 浏览器不复刻「在线、可接单、同租户」这些条件，否则两边会各自漂移。
+    transferTargets: id => request(`/conversations/${encodeURIComponent(id)}/transfer-targets`),
+    transferConversation: (id, toMemberId, version) => request(`/conversations/${encodeURIComponent(id)}/transfer`, {
+      method: 'POST',
+      body: { toMemberId, expectedVersion: version },
     }),
     presence: status => request('/assignment/presence', { method: 'PUT', body: { status } }),
     heartbeat: () => request('/assignment/presence/heartbeat', { method: 'POST' }),

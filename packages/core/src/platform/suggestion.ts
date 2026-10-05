@@ -157,6 +157,11 @@ export function generateSuggestions(input: SuggestionEngineInput): SuggestionEng
       // irrelevant — it is the engine saying it has no lexical evidence of its
       // own, and `rank` is where the answer to "why is this first" lives.
       score: entry.score,
+      // Carried, not spent: the workspace's 检索依据 is its only reader, and the
+      // engine never re-derives an order from it. Absent means the recall never
+      // saw this entry — the legacy products read, which bypasses the index — and
+      // that is a different statement from "recalled last".
+      ...(entry.item.recall === undefined ? {} : { recall: entry.item.recall }),
     } satisfies SuggestionCandidate),
   );
 
