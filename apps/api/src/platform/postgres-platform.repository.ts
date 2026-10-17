@@ -36,6 +36,7 @@ import { randomUUID } from 'node:crypto';
 import type { QueryResult, QueryResultRow } from 'pg';
 import {
   AUDIT_ACTIONS,
+  DEFAULT_ASSIGNMENT_WEIGHT,
   DEFAULT_RETENTION_DAYS,
   KNOWLEDGE_INDEX_FAILURE_LIMIT,
   MESSAGE_SOURCES,
@@ -45,13 +46,16 @@ import {
   createAuditEntry,
   createReviewPolicy,
   defaultReviewPolicy,
+  directInternalThreadId,
   isAssignmentDue,
   isIndexedSourceKind,
   isReviewEligibleSource,
   openConversationForInbound,
+  outboundMessageMedia,
   planAutoAssign,
   rejectionReasonCode,
   returnConversation,
+  sortedPair,
   summarizeKnowledgeIndexCounts,
   tenantRetentionPolicies,
   touchConversationForInbound,
@@ -62,6 +66,7 @@ import {
   type ApprovedPhrase,
   type AssignmentAction,
   type AssignmentCandidate,
+  type ConversationRoutingWeight,
   type AssignmentReasonCode,
   type AuditEntry,
   type CatalogAttributeValue,
@@ -85,6 +90,10 @@ import {
   type ImportSourceType,
   type IngestResult,
   type InboundMessageInput,
+  type InternalAttachmentKind,
+  type InternalAttachmentRecord,
+  type InternalMessage,
+  type InternalThread,
   type KnowledgeIndexFailure,
   type KnowledgeIndexStatusFilter,
   type KnowledgeIndexStatusSummary,
@@ -100,6 +109,8 @@ import {
   type NewProductSku,
   type NewProductSpu,
   type OutboundMessageInput,
+  type PersonalPhrase,
+  type PersonalPhrasePatch,
   type Product,
   type ProductCategory,
   type ProductImportBatch,
@@ -148,13 +159,18 @@ import {
 import {
   PlatformWriteError,
   type AppendAuditRecord,
+  type AppendInternalMessageRecord,
   type AttachMessageMediaInput,
   type CreateFaqRecord,
+  type CreateInternalAttachmentRecord,
+  type CreatePersonalPhraseRecord,
   type CreateProductRecord,
   type CreateShortcutRecord,
   type CreateSuggestionSetRecord,
   type DispatchDueInput,
+  type EnsureDirectInternalThreadRecord,
   type PlatformRepository,
+  type SaveRoutingWeightsRecord,
   type SetAgentPresenceRecord,
 } from './platform-repository';
 
@@ -426,6 +442,17 @@ export class PostgresPlatformRepository implements PlatformRepository {
     return rows.map(toMember);
   }
 
+  /** @inheritdoc */
+  async listPlatformAdministrators(): Promise<ReadonlyArray<Member>> {
+    // `tenant_id IS NULL` is the whole point: the platform side sits outside
+    // every tenant, so a join on a tenant column would drop exactly the rows
+    // this reader exists to find.
+    const rows = await this.rows(
+      "SELECT * FROM members WHERE tenant_id IS NULL AND role = 'platform_admin' AND enabled ORDER BY id",
+    );
+    return rows.map(toMember);
+  }
+
   // --------------------------------------------------------------------------
   // Knowledge
   // --------------------------------------------------------------------------
@@ -659,6 +686,100 @@ export class PostgresPlatformRepository implements PlatformRepository {
       ],
     );
     return optional(rows[0], toShortcut);
+  }
+
+  /**
+   * One member's own phrases, newest first.
+   *
+   * `member_id = $2` is in the `WHERE` rather than applied to the result: the
+   * row that is not mine is never read, so no code path downstream of this
+   * query can leak it. Newest first, id descending to break a tie: two phrases
+   * written in the same millisecond then still get one fixed order. (Which of
+   * the two comes first is not a fact the two adapters share — the in-memory
+   * store names its rows with a counter and this one with a UUID — so nothing
+   * may depend on it beyond the order being stable.)
+   */
+  async listPersonalPhrases(
+    tenantId: string,
+    memberId: string,
+  ): Promise<ReadonlyArray<PersonalPhrase>> {
+    const rows = await this.rows(
+      `SELECT * FROM personal_phrases
+        WHERE tenant_id = $1 AND member_id = $2
+        ORDER BY created_at DESC, id DESC`,
+      [tenantId, memberId],
+    );
+    return rows.map(toPersonalPhrase);
+  }
+
+  /** @inheritdoc */
+  async getPersonalPhrase(
+    tenantId: string,
+    memberId: string,
+    phraseId: string,
+  ): Promise<PersonalPhrase | undefined> {
+    const rows = await this.rows(
+      'SELECT * FROM personal_phrases WHERE tenant_id = $1 AND member_id = $2 AND id = $3',
+      [tenantId, memberId, phraseId],
+    );
+    return optional(rows[0], toPersonalPhrase);
+  }
+
+  /** @inheritdoc */
+  async createPersonalPhrase(input: CreatePersonalPhraseRecord): Promise<PersonalPhrase> {
+    const now = input.now ?? new Date().toISOString();
+    const rows = await this.rows(
+      `INSERT INTO personal_phrases
+         (id, tenant_id, member_id, category, title, keywords, text, enabled, updated_at, created_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, TRUE, $8, $8)
+       RETURNING *`,
+      [
+        `personal-phrase-${randomUUID()}`,
+        input.tenantId,
+        input.memberId,
+        input.category,
+        input.title,
+        [...input.keywords],
+        input.text,
+        now,
+      ],
+    );
+    return required(rows[0], toPersonalPhrase);
+  }
+
+  /** @inheritdoc */
+  async updatePersonalPhrase(
+    tenantId: string,
+    memberId: string,
+    phraseId: string,
+    patch: PersonalPhrasePatch,
+    now?: string,
+  ): Promise<PersonalPhrase | undefined> {
+    const rows = await this.rows(
+      `UPDATE personal_phrases
+          SET category = COALESCE($4, category),
+              title = COALESCE($5, title),
+              keywords = COALESCE($6::text[], keywords),
+              text = COALESCE($7, text),
+              enabled = COALESCE($8::boolean, enabled),
+              updated_at = $9
+        WHERE tenant_id = $1 AND member_id = $2 AND id = $3
+        RETURNING *`,
+      [
+        tenantId,
+        memberId,
+        phraseId,
+        patch.category ?? null,
+        patch.title ?? null,
+        // `undefined` means "leave the words alone"; `[]` is a value and clears
+        // them, which is exactly what COALESCE distinguishes here.
+        patch.keywords === undefined ? null : [...patch.keywords],
+        patch.text ?? null,
+        patch.enabled ?? null,
+        now ?? new Date().toISOString(),
+      ],
+    );
+    return optional(rows[0], toPersonalPhrase);
   }
 
   // --------------------------------------------------------------------------
@@ -1579,6 +1700,7 @@ export class PostgresPlatformRepository implements PlatformRepository {
       }
 
       const reviewEligible = isReviewEligibleSource(input.source);
+      const messageType = input.messageType ?? 'text';
       const message: Message = {
         id: `message-${randomUUID()}`,
         tenantId: current.tenantId,
@@ -1587,15 +1709,17 @@ export class PostgresPlatformRepository implements PlatformRepository {
         channel: 'internal',
         direction: 'outbound',
         source: input.source,
-        messageType: 'text',
+        messageType,
         content: input.content,
         dedupKey,
         reviewEligible,
         reviewState: reviewEligible ? 'pending' : 'none',
         candidateId: input.candidateId ?? null,
-        // Nothing the platform sends through the composer carries stored media
-        // yet: an outbound image would be uploaded to the provider, not kept.
-        media: null,
+        // The media, and the rule about which kinds may have it, come from the
+        // shared predicate rather than a second copy of it here: the in-memory
+        // store builds the same row for the same input, and the two must not be
+        // able to disagree about what a message is.
+        media: outboundMessageMedia({ messageType, media: input.media ?? null }),
         createdAt: now,
       };
 
@@ -1858,6 +1982,47 @@ export class PostgresPlatformRepository implements PlatformRepository {
     // string it prints the same as, which is a difference that only shows up in a
     // test that asserts the instant itself.
     return row === undefined ? undefined : toIso(row['created_at']);
+  }
+
+  /** @inheritdoc */
+  async listRoutingWeights(tenantId: string): Promise<ReadonlyArray<ConversationRoutingWeight>> {
+    // Ordered by member id for the same reason the roster is: a settings table
+    // whose rows reshuffle between reads looks like change that did not happen.
+    const rows = await this.rows(
+      `SELECT tenant_id, member_id, weight, updated_at, updated_by
+         FROM conversation_routing_weights
+        WHERE tenant_id = $1
+        ORDER BY member_id`,
+      [tenantId],
+    );
+    return rows.map(toRoutingWeight);
+  }
+
+  /** @inheritdoc */
+  async saveRoutingWeights(
+    input: SaveRoutingWeightsRecord,
+  ): Promise<ReadonlyArray<ConversationRoutingWeight>> {
+    // A save with nothing in it is not a write: skipping the transaction keeps
+    // "the console submitted the form unchanged" from costing a transaction and
+    // an audit row.
+    if (input.weights.length > 0) {
+      await this.transactions.run(async (client) => {
+        for (const entry of input.weights) {
+          await this.statement(
+            client,
+            `INSERT INTO conversation_routing_weights
+               (tenant_id, member_id, weight, updated_at, updated_by)
+             VALUES ($1, $2, $3, $4, $5)
+             ON CONFLICT (tenant_id, member_id) DO UPDATE
+               SET weight = EXCLUDED.weight,
+                   updated_at = EXCLUDED.updated_at,
+                   updated_by = EXCLUDED.updated_by`,
+            [input.tenantId, entry.memberId, entry.weight, input.now, input.updatedBy],
+          );
+        }
+      });
+    }
+    return this.listRoutingWeights(input.tenantId);
   }
 
   /** @inheritdoc */
@@ -2190,6 +2355,180 @@ export class PostgresPlatformRepository implements PlatformRepository {
       expiredCountByEntity: Object.freeze(expiredCountByEntity),
       totalExpired,
     });
+  }
+
+  // --------------------------------------------------------------------------
+  // Internal collaboration
+  // --------------------------------------------------------------------------
+
+  /** @inheritdoc */
+  async listInternalThreads(
+    tenantId: string,
+    memberId: string,
+  ): Promise<ReadonlyArray<InternalThread>> {
+    const rows = await this.rows(
+      `SELECT * FROM internal_threads
+        WHERE tenant_id = $1 AND (participant_a = $2 OR participant_b = $2)
+        ORDER BY last_message_at DESC, id`,
+      [tenantId, memberId],
+    );
+    return rows.map(toInternalThread);
+  }
+
+  /** @inheritdoc */
+  async getInternalThread(
+    tenantId: string,
+    threadId: string,
+  ): Promise<InternalThread | undefined> {
+    const rows = await this.rows(
+      'SELECT * FROM internal_threads WHERE tenant_id = $1 AND id = $2',
+      [tenantId, threadId],
+    );
+    return optional(rows[0], toInternalThread);
+  }
+
+  /** @inheritdoc */
+  async ensureDirectInternalThread(input: EnsureDirectInternalThreadRecord): Promise<InternalThread> {
+    const [participantA, participantB] = sortedPair(input.memberIdA, input.memberIdB);
+    const id = directInternalThreadId(input.tenantId, participantA, participantB);
+    // `ON CONFLICT DO NOTHING` rather than a read-then-write: two seats opening
+    // the same chat at the same instant would both find nothing and both insert,
+    // and the loser would surface a unique-key violation as a 500. Here the
+    // second insert is simply a no-op, and the `RETURNING` tells us which
+    // happened without a second round trip in the common case.
+    const inserted = await this.rows(
+      `INSERT INTO internal_threads
+         (id, tenant_id, kind, participant_a, participant_b, created_at, last_message_at)
+       VALUES ($1, $2, 'direct', $3, $4, $5, $5)
+       ON CONFLICT (id) DO NOTHING
+       RETURNING *`,
+      [id, input.tenantId, participantA, participantB, input.now],
+    );
+    const created = optional(inserted[0], toInternalThread);
+    if (created !== undefined) {
+      return created;
+    }
+    const existing = await this.getInternalThread(input.tenantId, id);
+    if (existing === undefined) {
+      throw new Error('store invariant: the internal thread vanished after a conflicting insert');
+    }
+    return existing;
+  }
+
+  /** @inheritdoc */
+  async listInternalMessages(
+    tenantId: string,
+    threadId: string,
+  ): Promise<ReadonlyArray<InternalMessage>> {
+    const rows = await this.rows(
+      `${INTERNAL_MESSAGE_SELECT}
+        WHERE m.tenant_id = $1 AND m.thread_id = $2
+        ORDER BY m.created_at, m.id`,
+      [tenantId, threadId],
+    );
+    return rows.map(toInternalMessage);
+  }
+
+  /** @inheritdoc */
+  async appendInternalMessage(input: AppendInternalMessageRecord): Promise<InternalMessage | undefined> {
+    const id = `internal-message-${randomUUID()}`;
+    // One transaction, because three rows have to agree: the message, the
+    // thread's activity stamp the list is ordered by, and — when there is one —
+    // the attachment the message claims. Committing the message alone would
+    // leave a thread that never rises to the top of its list; claiming an
+    // attachment outside the message's own transaction would leave a file
+    // marked as sent by a message that was never written.
+    try {
+      return await this.transactions.run(async (client) => {
+        // The message first, then the claim, and the order is not cosmetic:
+        // the claim writes the message's id into the attachment row, and
+        // `internal_attachments.message_id` is a foreign key to this very table.
+        // Claiming first points a constraint at a row that does not exist yet.
+        await this.statement(
+          client,
+          `INSERT INTO internal_messages (id, tenant_id, thread_id, sender_member_id, body, created_at)
+           VALUES ($1, $2, $3, $4, $5, $6)`,
+          [id, input.tenantId, input.threadId, input.senderMemberId, input.body, input.createdAt],
+        );
+        if (input.attachmentId !== null) {
+          // The claim is the guard as well as the write: the `WHERE` names every
+          // condition of "this is my unsent draft in this thread", so a draft
+          // from another thread, another uploader, or one already sent matches
+          // nothing and the message is refused rather than written pointing at
+          // somebody else's file.
+          const claimed = await this.statement(
+            client,
+            `UPDATE internal_attachments SET message_id = $4
+              WHERE tenant_id = $1 AND id = $2 AND thread_id = $3
+                AND uploader_member_id = $5 AND message_id IS NULL`,
+            [input.tenantId, input.attachmentId, input.threadId, id, input.senderMemberId],
+          );
+          if (claimed.rowCount !== 1) {
+            // The message row is already written above, so returning here would
+            // commit a message whose attachment was refused. Only a rollback
+            // undoes it, and a rollback is only reachable by throwing.
+            throw new UnclaimableAttachmentError();
+          }
+        }
+        await this.statement(
+          client,
+          'UPDATE internal_threads SET last_message_at = $3 WHERE tenant_id = $1 AND id = $2',
+          [input.tenantId, input.threadId, input.createdAt],
+        );
+        // Re-read rather than mapped from the insert: the attachment columns
+        // come from a join, and building the view twice — once here, once in the
+        // read path — is how the two would eventually disagree.
+        const view = await this.statement(
+          client,
+          `${INTERNAL_MESSAGE_SELECT} WHERE m.id = $1`,
+          [id],
+        );
+        return required(view.rows[0], toInternalMessage);
+      });
+    } catch (error) {
+      if (error instanceof UnclaimableAttachmentError) {
+        return undefined;
+      }
+      throw error;
+    }
+  }
+
+  /** @inheritdoc */
+  async createInternalAttachment(
+    input: CreateInternalAttachmentRecord,
+  ): Promise<InternalAttachmentRecord> {
+    const rows = await this.rows(
+      `INSERT INTO internal_attachments
+         (id, tenant_id, thread_id, uploader_member_id, kind, file_name, mime_type,
+          byte_size, object_key, message_id, created_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NULL, $10)
+       RETURNING *`,
+      [
+        input.id,
+        input.tenantId,
+        input.threadId,
+        input.uploaderMemberId,
+        input.kind,
+        input.fileName,
+        input.mimeType,
+        input.byteSize,
+        input.objectKey,
+        input.createdAt,
+      ],
+    );
+    return required(rows[0], toInternalAttachment);
+  }
+
+  /** @inheritdoc */
+  async getInternalMessageAttachment(
+    tenantId: string,
+    messageId: string,
+  ): Promise<InternalAttachmentRecord | undefined> {
+    const rows = await this.rows(
+      'SELECT * FROM internal_attachments WHERE tenant_id = $1 AND message_id = $2',
+      [tenantId, messageId],
+    );
+    return optional(rows[0], toInternalAttachment);
   }
 
   // --------------------------------------------------------------------------
@@ -2534,6 +2873,17 @@ export class PostgresPlatformRepository implements PlatformRepository {
       message.reviewState,
       message.candidateId,
       message.createdAt,
+      // The media reference is written in the same statement as the row it
+      // belongs to, not patched in afterwards the way an inbound picture's is.
+      // That is the whole shape of the outbound path: by the time a message
+      // naming a file exists, the bytes are in the bucket and the provider is
+      // holding its own copy, so there is no interval in which the row promises
+      // something that is not there yet.
+      message.media?.key ?? null,
+      message.media?.mimeType ?? null,
+      message.media?.bytes ?? null,
+      message.media?.name ?? null,
+      message.media?.providerMediaId ?? null,
     ];
     const conflictClause =
       message.dedupKey === null
@@ -2544,8 +2894,9 @@ export class PostgresPlatformRepository implements PlatformRepository {
         client,
         `INSERT INTO messages (
            id, tenant_id, store_id, conversation_id, channel, direction, source, message_type,
-           content, dedup_key, review_eligible, review_state, candidate_id, created_at
-         ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+           content, dedup_key, review_eligible, review_state, candidate_id, created_at,
+           media_key, media_mime, media_bytes, media_name, provider_media_id
+         ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19)
          ${conflictClause}
          RETURNING *`,
         values,
@@ -2611,6 +2962,12 @@ export class PostgresPlatformRepository implements PlatformRepository {
    * `p.status` is the row's own value; a seat that has never connected joins to
    * NULL and is reported `offline`. The liveness *window* is applied by the
    * shared rule, not here.
+   *
+   * 分流权重 joins the same way and defaults **in SQL**: a seat nobody has
+   * configured weighs `DEFAULT_ASSIGNMENT_WEIGHT`, which is the value the
+   * in-memory adapter and the settings surface use, interpolated from the core
+   * constant so there is one number rather than three. It is a compile-time
+   * constant, never anything a request supplied.
    */
   private async readCandidates(
     query: (text: string, values: ReadonlyArray<unknown>) => Promise<ReadonlyArray<QueryResultRow>>,
@@ -2620,6 +2977,7 @@ export class PostgresPlatformRepository implements PlatformRepository {
     const rows = await query(
       `SELECT m.id, m.tenant_id, m.store_id, m.role, m.enabled,
               p.status AS presence_status, p.heartbeat_at,
+              COALESCE(rw.weight, ${DEFAULT_ASSIGNMENT_WEIGHT}) AS routing_weight,
               (SELECT count(*) FROM conversations c
                 WHERE c.tenant_id = m.tenant_id
                   AND c.assigned_member_id = m.id
@@ -2627,6 +2985,8 @@ export class PostgresPlatformRepository implements PlatformRepository {
          FROM members m
          LEFT JOIN agent_presence p
            ON p.tenant_id = m.tenant_id AND p.member_id = m.id
+         LEFT JOIN conversation_routing_weights rw
+           ON rw.tenant_id = m.tenant_id AND rw.member_id = m.id
         WHERE m.tenant_id = $1
           AND ($2::text IS NULL OR m.store_id = $2)
           AND m.role = 'agent'
@@ -2930,6 +3290,21 @@ function toShortcut(row: QueryResultRow): Shortcut {
   };
 }
 
+function toPersonalPhrase(row: QueryResultRow): PersonalPhrase {
+  return {
+    id: toText(row['id']),
+    tenantId: toText(row['tenant_id']),
+    memberId: toText(row['member_id']),
+    category: toText(row['category']),
+    title: toText(row['title']),
+    keywords: toStringArray(row['keywords']),
+    text: toText(row['text']),
+    enabled: toBoolean(row['enabled']),
+    updatedAt: toIso(row['updated_at']),
+    createdAt: toIso(row['created_at']),
+  };
+}
+
 function toFaqQuestionVariant(row: QueryResultRow): FaqQuestionVariant {
   return {
     id: toText(row['id']),
@@ -3118,6 +3493,16 @@ function toAssignment(row: QueryResultRow): ConversationAssignment {
   };
 }
 
+function toRoutingWeight(row: QueryResultRow): ConversationRoutingWeight {
+  return {
+    tenantId: toText(row['tenant_id']),
+    memberId: toText(row['member_id']),
+    weight: toNumber(row['weight']),
+    updatedAt: toIso(row['updated_at']),
+    updatedBy: toTextOrNull(row['updated_by']),
+  };
+}
+
 function toAssignmentCandidate(row: QueryResultRow): AssignmentCandidate {
   return {
     memberId: toText(row['id']),
@@ -3132,6 +3517,10 @@ function toAssignmentCandidate(row: QueryResultRow): AssignmentCandidate {
       ? 'offline'
       : toText(row['presence_status'])) as AssignmentCandidate['status'],
     heartbeatAt: toIsoOrNull(row['heartbeat_at']),
+    // Already `DEFAULT_ASSIGNMENT_WEIGHT` where no row exists: the `COALESCE` in
+    // `readCandidates` applies the default, so nothing downstream has to know
+    // which seats the table happens to hold.
+    weight: toNumber(row['routing_weight']),
     inProgressCount: toNumber(row['in_progress_count']),
   };
 }
@@ -3139,10 +3528,15 @@ function toAssignmentCandidate(row: QueryResultRow): AssignmentCandidate {
 /**
  * The stored media of one message row, or `null` when it has none.
  *
- * All three columns or none: migration `0013`'s CHECK keeps a half-written
+ * All three of `0013`'s columns or none: its CHECK keeps a half-written
  * reference from existing, and a row that somehow carried one is read as having
  * no media rather than a partial one — the transcript's fallback is the
  * placeholder, which is the truth for a message whose bytes cannot be located.
+ *
+ * `media_name` and `provider_media_id` are a different matter and are read
+ * separately, because `null` is the ordinary value for both: a customer's
+ * picture has no name and no handle worth keeping, and that says nothing about
+ * whether the bytes are there.
  *
  * @param row - One `messages` row.
  * @returns The reference, or `null`.
@@ -3154,7 +3548,13 @@ function toMessageMedia(row: QueryResultRow): MessageMedia | null {
   if (key === null || mimeType === null || bytes === null) {
     return null;
   }
-  return { key, mimeType, bytes };
+  return {
+    key,
+    mimeType,
+    bytes,
+    name: toTextOrNull(row['media_name']),
+    providerMediaId: toTextOrNull(row['provider_media_id']),
+  };
 }
 
 function toMessage(row: QueryResultRow): Message {
@@ -3283,6 +3683,110 @@ function toApprovedPhrase(row: QueryResultRow): ApprovedPhrase {
     approvedBy: toText(row['approved_by']),
     createdAt: toIso(row['created_at']),
   };
+}
+
+function toInternalThread(row: QueryResultRow): InternalThread {
+  return {
+    id: toText(row['id']),
+    tenantId: toText(row['tenant_id']),
+    // The column admits only 'direct' today (see migration 0019); the kind is
+    // restated here rather than parsed so a future group kind fails loudly at
+    // the type instead of being silently accepted as a direct thread.
+    kind: 'direct',
+    participantMemberIds: sortedPair(
+      toText(row['participant_a']),
+      toText(row['participant_b']),
+    ),
+    createdAt: toIso(row['created_at']),
+    lastMessageAt: toIso(row['last_message_at']),
+  };
+}
+
+/**
+ * One message with its attachment folded in, as both the read path and the
+ * append path see it.
+ *
+ * A `LEFT JOIN` rather than a second query per message, and — more to the point
+ * — the attachment row is the only place the link lives: `a.message_id = m.id`.
+ * Nothing on the message says "I have a file", so the two cannot disagree about
+ * which message a file belongs to.
+ */
+const INTERNAL_MESSAGE_SELECT = `SELECT m.*,
+         a.id AS attachment_id,
+         a.kind AS attachment_kind,
+         a.file_name AS attachment_file_name,
+         a.mime_type AS attachment_mime_type,
+         a.byte_size AS attachment_byte_size
+    FROM internal_messages m
+    LEFT JOIN internal_attachments a ON a.message_id = m.id`;
+
+/**
+ * Rollback signal for a send whose named draft could not be claimed.
+ *
+ * It exists only to make `TransactionManager.run` roll back: by the time the
+ * claim is checked the message row has already been inserted, and no statement
+ * can take it back. It is caught by {@link PostgresPlatformRepository}'s
+ * `appendInternalMessage` and never escapes that method — the caller outside
+ * gets the `undefined` that means "refused", which is the same answer the
+ * in-memory adapter gives.
+ */
+class UnclaimableAttachmentError extends Error {}
+
+function toInternalMessage(row: QueryResultRow): InternalMessage {
+  const attachmentId = toTextOrNull(row['attachment_id']);
+  return {
+    id: toText(row['id']),
+    tenantId: toText(row['tenant_id']),
+    threadId: toText(row['thread_id']),
+    senderMemberId: toText(row['sender_member_id']),
+    body: toText(row['body']),
+    attachment:
+      attachmentId === null
+        ? null
+        : {
+            id: attachmentId,
+            kind: toInternalAttachmentKind(row['attachment_kind']),
+            fileName: toText(row['attachment_file_name']),
+            mimeType: toText(row['attachment_mime_type']),
+            byteSize: toNumber(row['attachment_byte_size']),
+          },
+    createdAt: toIso(row['created_at']),
+  };
+}
+
+function toInternalAttachment(row: QueryResultRow): InternalAttachmentRecord {
+  return {
+    id: toText(row['id']),
+    tenantId: toText(row['tenant_id']),
+    threadId: toText(row['thread_id']),
+    uploaderMemberId: toText(row['uploader_member_id']),
+    kind: toInternalAttachmentKind(row['kind']),
+    fileName: toText(row['file_name']),
+    mimeType: toText(row['mime_type']),
+    byteSize: toNumber(row['byte_size']),
+    objectKey: toText(row['object_key']),
+    messageId: toTextOrNull(row['message_id']),
+    createdAt: toIso(row['created_at']),
+  };
+}
+
+/**
+ * The kind column, restated rather than parsed.
+ *
+ * The column's `CHECK` admits three values; a fourth would be a migration
+ * somebody made without telling the code, and failing here is what makes that
+ * loud instead of silently rendering a file as a picture. The same shape as the
+ * `kind: 'direct'` restatement above.
+ *
+ * @param value - The raw column value.
+ * @returns The kind.
+ * @throws {Error} When the value is not one of the three.
+ */
+function toInternalAttachmentKind(value: unknown): InternalAttachmentKind {
+  if (value === 'image' || value === 'video' || value === 'file') {
+    return value;
+  }
+  throw new Error('store invariant: unknown internal attachment kind');
 }
 
 function toAuditEntry(row: QueryResultRow): AuditEntry {

@@ -35,6 +35,9 @@ export const MEDIA_URL_TTL_SECONDS = 600;
 /** The controller path the media route answers on. */
 export const MEDIA_CONTROLLER_PATH = 'media';
 
+/** The controller path internal attachments are served on. */
+export const INTERNAL_MEDIA_CONTROLLER_PATH = 'internal-media';
+
 /**
  * Where the media route is mounted.
  *
@@ -43,6 +46,21 @@ export const MEDIA_CONTROLLER_PATH = 'media';
  * picture with no compile error, so the two facts are kept as one.
  */
 export const MEDIA_URL_PATH = `/${API_PREFIX}/${MEDIA_CONTROLLER_PATH}`;
+
+/** Where the internal attachment route is mounted. @see MEDIA_URL_PATH */
+export const INTERNAL_MEDIA_URL_PATH = `/${API_PREFIX}/${INTERNAL_MEDIA_CONTROLLER_PATH}`;
+
+/**
+ * What a URL is *for*.
+ *
+ * Two routes serve stored bytes — a customer's picture, and a file one colleague
+ * sent another — and they are signed with the same secret, so without this a
+ * signature minted for one could be presented to the other. The ids are
+ * namespaced (`internal-message-…` versus whatever a channel assigned), so a
+ * collision is not expected; "not expected" is not the same as "cannot happen",
+ * and the cost of making it impossible is one word in the signed string.
+ */
+export type MediaUrlPurpose = 'message' | 'internal-attachment';
 
 /** Query parameter carrying the tenant the message belongs to. */
 export const MEDIA_URL_TENANT_PARAM = 'tenant';
@@ -81,21 +99,25 @@ export class MediaUrlService {
   /**
    * Mint the URL one message's media can be read from.
    *
-   * @param input - The message's tenant and id; the clock, for a test.
+   * @param input - The message's tenant and id, what the URL is for; the clock,
+   *   for a test.
    * @returns The path and query, relative to the deployment's own origin.
    */
   url(input: {
     readonly tenantId: string;
     readonly messageId: string;
+    readonly purpose?: MediaUrlPurpose;
     readonly now?: number;
   }): string {
+    const purpose = input.purpose ?? 'message';
     const expiresAt = Math.floor((input.now ?? Date.now()) / 1000) + MEDIA_URL_TTL_SECONDS;
     const query = new URLSearchParams({
       [MEDIA_URL_TENANT_PARAM]: input.tenantId,
       [MEDIA_URL_EXPIRY_PARAM]: String(expiresAt),
-      [MEDIA_URL_SIGNATURE_PARAM]: this.#sign(input.tenantId, input.messageId, expiresAt),
+      [MEDIA_URL_SIGNATURE_PARAM]: this.#sign(purpose, input.tenantId, input.messageId, expiresAt),
     });
-    return `${MEDIA_URL_PATH}/${encodeURIComponent(input.messageId)}?${query.toString()}`;
+    const path = purpose === 'internal-attachment' ? INTERNAL_MEDIA_URL_PATH : MEDIA_URL_PATH;
+    return `${path}/${encodeURIComponent(input.messageId)}?${query.toString()}`;
   }
 
   /**
@@ -104,7 +126,7 @@ export class MediaUrlService {
    * The signature is checked before the expiry, so a caller who never had a
    * valid link learns nothing from this route about which of the two was wrong.
    *
-   * @param input - The query's parameters, as received.
+   * @param input - The query's parameters, as received, and the route's purpose.
    * @returns The signed subject, or why it was refused.
    */
   verify(input: {
@@ -112,8 +134,10 @@ export class MediaUrlService {
     readonly tenantId: string | null;
     readonly expiry: string | null;
     readonly signature: string | null;
+    readonly purpose?: MediaUrlPurpose;
     readonly now?: number;
   }): MediaUrlVerdict {
+    const purpose = input.purpose ?? 'message';
     const tenantId = input.tenantId ?? '';
     const expiresAt = Number(input.expiry ?? '');
     const offered = input.signature ?? '';
@@ -123,7 +147,7 @@ export class MediaUrlService {
       // learning which part was missing.
       return { ok: false, reason: 'signature_mismatch' };
     }
-    const expected = this.#sign(tenantId, input.messageId, expiresAt);
+    const expected = this.#sign(purpose, tenantId, input.messageId, expiresAt);
     if (!equalSignatures(expected, offered)) {
       return { ok: false, reason: 'signature_mismatch' };
     }
@@ -134,9 +158,14 @@ export class MediaUrlService {
   }
 
   /** The signature over one subject, as lowercase hex. */
-  #sign(tenantId: string, messageId: string, expiresAt: number): string {
+  #sign(
+    purpose: MediaUrlPurpose,
+    tenantId: string,
+    messageId: string,
+    expiresAt: number,
+  ): string {
     return createHmac('sha256', this.#key)
-      .update(`${tenantId}\n${messageId}\n${String(expiresAt)}`)
+      .update(`${purpose}\n${tenantId}\n${messageId}\n${String(expiresAt)}`)
       .digest('hex');
   }
 }

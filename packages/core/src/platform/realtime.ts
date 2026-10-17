@@ -36,6 +36,7 @@ export const REALTIME_EVENT_TYPES = [
   'message.created',
   'message.delivery_updated',
   'presence.changed',
+  'internal.message.created',
 ] as const;
 
 /** A frame kind the realtime channel can send. */
@@ -137,6 +138,24 @@ export type PresenceChangedEvent = {
   };
 };
 
+/**
+ * A colleague wrote in an internal thread.
+ *
+ * Carries the thread and the message id and nothing else — in particular not
+ * the body. A frame is a nudge to re-read REST, and the REST read is scoped to
+ * the two participants; putting the text in the frame would send it to every
+ * seat in the tenant, which is exactly the leak the separate internal model
+ * exists to avoid.
+ */
+export type InternalMessageCreatedEvent = {
+  readonly event_type: 'internal.message.created';
+  readonly data: {
+    readonly thread_id: string;
+    readonly message_id: string;
+    readonly sender_member_id: string;
+  };
+};
+
 /** A frame's kind and its kind-specific payload, without the envelope. */
 export type RealtimeEventPayload =
   | RealtimeControlEvent
@@ -144,7 +163,8 @@ export type RealtimeEventPayload =
   | ConversationUpdatedEvent
   | MessageCreatedEvent
   | MessageDeliveryUpdatedEvent
-  | PresenceChangedEvent;
+  | PresenceChangedEvent
+  | InternalMessageCreatedEvent;
 
 /** A full frame: the envelope plus the payload its kind carries. */
 export type RealtimeEvent = RealtimeEventPayload & RealtimeEnvelope;

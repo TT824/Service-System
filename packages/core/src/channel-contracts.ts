@@ -85,6 +85,61 @@ export type UnifiedMedia = {
 };
 
 /**
+ * What a message row knows about the provider's copy of its media.
+ *
+ * The two fields and nothing else, because they are the two the provider needs
+ * in order to send: the handle it gave us, and the type it was told the bytes
+ * are. Both live on the message row — the type since migration `0013`, the
+ * handle since `0021` — because the process that retries a delivery has no other
+ * way to learn them.
+ *
+ * A shape of its own rather than `MessageMedia` because two different
+ * projections fill it: the API has the whole domain {@link Message}, and the
+ * worker has only the columns its own query selected. Naming the pair once is
+ * what lets {@link providerMediaOf} accept both.
+ */
+export type ProviderMediaRef = {
+  readonly mimeType: string | null;
+  readonly providerMediaId: string | null;
+};
+
+/**
+ * What a provider needs in order to send a message's media, or `null`.
+ *
+ * The provider is handed a *handle*, never a location: it holds its own copy of
+ * the bytes, uploaded before the message naming it existed, and there is no path
+ * by which it would accept a URL from us. So the handle recorded on the row is
+ * the whole of what goes out, and the reason it is read from the row rather
+ * than carried around is that the worker that retries a delivery has no adapter
+ * of its own — only the database.
+ *
+ * Here rather than at the two call sites (the API's first attempt and the
+ * worker's retry) because those two must agree about what "this message has
+ * media" means, which is the same reasoning `countsAsFirstReply` records for the
+ * rule about which sends stop the first-reply clock. That is also why the
+ * parameter is {@link ProviderMediaRef} and not a domain message: the two
+ * callers hold different halves of a row, and a function that accepted only one
+ * of them would have to be written twice.
+ *
+ * A media message with no handle answers `null`, which the providers refuse with
+ * their own message about a missing `media_id` — a loud failure with a readable
+ * reason, rather than a picture-shaped bubble that was never going to arrive.
+ *
+ * @param message - Any message projection carrying its provider-media pair.
+ * @returns The provider's view of the media, or `null` when there is none to
+ *   send.
+ */
+export function providerMediaOf(message: {
+  readonly media: ProviderMediaRef | null;
+}): UnifiedMedia | null {
+  const media = message.media;
+  if (media === null || media.providerMediaId === null || media.mimeType === null) {
+    return null;
+  }
+  return { mediaId: media.providerMediaId, mimeType: media.mimeType };
+}
+
+/**
  * Provider-neutral message exchanged with an external channel.
  *
  * Inbound and outbound messages share one shape. Business identifiers are
@@ -158,17 +213,27 @@ export type SendMessageResult = {
 };
 
 /**
- * Placeholders for the message types a *provider* names and this platform does
- * not map onto {@link MessageType}.
+ * Placeholders for the message types a *provider* names and this platform keeps
+ * no kind of its own for.
  *
- * WeCom's customer-service callbacks carry a voice, a video, a file and a
- * handful of other payloads the platform deliberately keeps out of its message
- * type: the transcript shows one unified placeholder per non-text kind, so the
- * three-value enum, the column's CHECK constraint and every migration stay as
- * they are. Such a message is therefore stored as *text* whose content is one of
- * these strings, and the only way anything downstream can still tell it apart
- * from something the customer typed is to recognise the string — which is what
- * {@link isChannelMessagePlaceholder} exists for.
+ * WeCom's customer-service callbacks carry a voice, a location, a business card
+ * and a handful of other payloads there is no message type for: the transcript
+ * shows one unified placeholder per non-text kind, so such a message is stored
+ * as *text* whose content is one of these strings, and the only way anything
+ * downstream can still tell it apart from something the customer typed is to
+ * recognise the string — which is what {@link isChannelMessagePlaceholder}
+ * exists for.
+ *
+ * `video` and `file` are on this table for a different reason than they once
+ * were. Since migration `0021` a message *may* be one of those two — but only
+ * outbound, where the seat's own upload is what makes it one: the bytes leave
+ * for the provider and a copy lands in our bucket, so a message typed `video`
+ * always has something behind it. Nothing inbound takes that path, because the
+ * inbound media pipeline keeps pictures only, and typing a customer's clip
+ * `video` without downloading it would produce a bubble that can never be
+ * played. A customer's clip therefore still arrives as text reading `[视频消息]`,
+ * and the asymmetry is deliberate rather than unfinished: the kind exists, and
+ * this direction does not use it yet.
  *
  * The provider's own token never reaches an operator: a type this table has no
  * name for becomes {@link UNKNOWN_MESSAGE_PLACEHOLDER}, not `[msgmenu]`.
@@ -192,8 +257,11 @@ const UNKNOWN_MESSAGE_PLACEHOLDER = '[非文本消息]';
  * Stable placeholder shown when a non-text payload has no readable caption.
  *
  * @param messageType - A unified message type, or the raw type a provider named
- * for a payload outside that enum. Unknown provider types are named rather than
- * echoed, so nothing an operator reads is a provider's field value.
+ * for a payload the platform keeps no kind of. `video` and `file` are in the
+ * enum and still resolve here, which is the point: a clip the customer sent is
+ * stored as text and must render as `[视频消息]` whichever direction the type
+ * came from. Unknown provider types are named rather than echoed, so nothing an
+ * operator reads is a provider's field value.
  * @returns The placeholder for that type.
  */
 export function channelMessagePlaceholder(messageType: MessageType | string): string {
@@ -204,6 +272,9 @@ export function channelMessagePlaceholder(messageType: MessageType | string): st
       return '[图片消息]';
     case 'link':
       return '[链接消息]';
+    // `video` and `file` are absent on purpose: the default branch already
+    // answers both with the same strings from the provider table, and a case
+    // here would be a second place saying what those two words mean.
     default:
       return PROVIDER_MESSAGE_PLACEHOLDERS[messageType] ?? UNKNOWN_MESSAGE_PLACEHOLDER;
   }
@@ -271,8 +342,25 @@ export type ChannelAdapter = {
   uploadMedia(input: {
     readonly tenantId: string;
     readonly storeId: string;
+    /**
+     * Which of the three media kinds this upload is for.
+     *
+     * Not inferred from the MIME type beside it: a provider takes one upload
+     * type per request and measures the bytes against the type it was given, so
+     * a caller that guessed would be told about a mismatch only after the
+     * provider had spent an access token on it.
+     */
+    readonly kind: Extract<MessageType, 'image' | 'video' | 'file'>;
     readonly mimeType: string;
     readonly bytes: Uint8Array;
+    /**
+     * The sender's own file name, for a `file` upload.
+     *
+     * A file message arrives at the other end as a named file, and for some
+     * providers the upload is the only place that name can travel. An image or
+     * a video is measured by its bytes and needs none.
+     */
+    readonly fileName?: string;
   }): Promise<ChannelResult<UploadMediaResult>>;
 };
 

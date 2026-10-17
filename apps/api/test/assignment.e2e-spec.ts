@@ -110,16 +110,20 @@ describe('Assignment (interface)', () => {
     // inheriting whatever the previous one left behind.
     //
     // `seed()` restores the members, conversations, messages and audit trail but
-    // deliberately leaves presence and assignment history alone, because in
-    // production those outlive a directory reload. A test needs them cleared too,
-    // which is why the reset names all six rather than calling `seed()` alone.
+    // deliberately leaves presence, assignment history and 分流权重 alone, because
+    // in production those outlive a directory reload — a weight especially, being
+    // configuration rather than a runtime fact. A test needs them cleared too,
+    // which is why the reset names each of them rather than calling `seed()`
+    // alone.
     const internals = store as unknown as {
       seed: () => void;
       presence: unknown[];
       assignments: unknown[];
+      routingWeights: unknown[];
     };
     internals.presence = [];
     internals.assignments = [];
+    internals.routingWeights = [];
     internals.seed();
   });
 
@@ -642,5 +646,201 @@ describe('Assignment (interface)', () => {
       .expect(200);
     // A 404 here would mean the literal route was captured by `:conversationId`.
     expect(Array.isArray((response.body as DataEnvelope).data)).toBe(true);
+  });
+
+  /**
+   * 会话分流 over the real HTTP surface.
+   *
+   * The platform administrator needs **both** headers and this is why: it belongs
+   * to no tenant, so `x-tenant-id` names the tenant whose seats are being
+   * configured, and `x-member-id` names it as the actor.
+   *
+   * The ratio arithmetic itself — cross-multiplied loads, exact ties, the
+   * relative-weight reading of `60/40` — is covered exhaustively by the core
+   * spec, where a candidate can be built with any load. What these tests pin down
+   * is the plumbing: that a stored weight reaches the sweep at all, that the
+   * refusals are refusals, and that a change is recorded.
+   */
+  describe('会话分流: a stored weight decides what a sweep reaches', () => {
+    type RoutingSeatRow = {
+      memberId: string;
+      weight: number;
+      configured: boolean;
+      enabled: boolean;
+      status: string;
+      live: boolean;
+      inProgressCount: number;
+      updatedAt: string | null;
+      updatedBy: string | null;
+    };
+
+    /**
+     * Read the tenant's routing policy as the platform administrator.
+     *
+     * @returns The seats the API answered with.
+     */
+    async function readRouting(): Promise<ReadonlyArray<RoutingSeatRow>> {
+      const response = await request(app.getHttpServer())
+        .get('/api/v1/assignment/routing')
+        .set('x-member-id', SEEDED_PLATFORM_ADMIN_MEMBER_ID)
+        .set('x-tenant-id', T1)
+        .expect(200);
+      return ((response.body as DataEnvelope).data as { seats: ReadonlyArray<RoutingSeatRow> }).seats;
+    }
+
+    /**
+     * Submit weights as the platform administrator.
+     *
+     * @param weights - The seats to speak for, in the request body's own spelling.
+     * @returns The response, so a test can assert a refusal as well as a write.
+     */
+    function putRouting(
+      weights: ReadonlyArray<{ member_id: string; weight: number }>,
+    ): request.Test {
+      return request(app.getHttpServer())
+        .put('/api/v1/assignment/routing')
+        .set('x-member-id', SEEDED_PLATFORM_ADMIN_MEMBER_ID)
+        .set('x-tenant-id', T1)
+        .send({ weights });
+    }
+
+    /**
+     * One seat of the policy by member id.
+     *
+     * @param seats - The seats the API returned.
+     * @param memberId - The seat to find.
+     * @returns The row, or `undefined` when the seat is not in the policy.
+     */
+    function seatOf(
+      seats: ReadonlyArray<RoutingSeatRow>,
+      memberId: string,
+    ): RoutingSeatRow | undefined {
+      return seats.find((seat) => seat.memberId === memberId);
+    }
+
+    it('reads every agent seat at the default weight, authored by nobody', async () => {
+      const seats = await readRouting();
+      expect(seats.map((seat) => seat.memberId)).toEqual(
+        expect.arrayContaining([AGENT_1, AGENT_2]),
+      );
+      // Nobody has chosen a weight, so every seat weighs the default and says so:
+      // the console must not present a default as if an administrator picked it.
+      for (const seat of seats) {
+        expect(seat.weight).toBe(1);
+        expect(seat.configured).toBe(false);
+        expect(seat.updatedAt).toBeNull();
+        expect(seat.updatedBy).toBeNull();
+        // No presence row has been written, so no seat is live — and the window
+        // that decides that is applied by the shared rule, not by the handler.
+        expect(seat.live).toBe(false);
+      }
+    });
+
+    it('stores the ratio as submitted instead of normalising it', async () => {
+      await putRouting([
+        { member_id: AGENT_1, weight: 60 },
+        { member_id: AGENT_2, weight: 40 },
+      ]).expect(200);
+
+      const seats = await readRouting();
+      // 相对权重: the ratio is the policy, so 60/40 is stored as 60 and 40 rather
+      // than being rewritten to something that adds up.
+      expect(seatOf(seats, AGENT_1)).toMatchObject({ weight: 60, configured: true });
+      expect(seatOf(seats, AGENT_2)).toMatchObject({ weight: 40, configured: true });
+      expect(seatOf(seats, AGENT_1)?.updatedBy).toBe(SEEDED_PLATFORM_ADMIN_MEMBER_ID);
+      expect(seatOf(seats, AGENT_1)?.updatedAt).not.toBeNull();
+    });
+
+    it('leaves the seats a save does not name exactly as they were', async () => {
+      await putRouting([{ member_id: AGENT_1, weight: 5 }]).expect(200);
+      await putRouting([{ member_id: AGENT_1, weight: 7 }]).expect(200);
+
+      const seats = await readRouting();
+      expect(seatOf(seats, AGENT_1)?.weight).toBe(7);
+      // Silence is not a reset: the seat nobody mentioned still reads as never
+      // configured rather than as an explicit default.
+      expect(seatOf(seats, AGENT_2)).toMatchObject({ weight: 1, configured: false });
+    });
+
+    it('takes a zero-weighted seat out of the sweep', async () => {
+      await putRouting([
+        { member_id: AGENT_1, weight: 0 },
+        { member_id: AGENT_2, weight: 1 },
+      ]).expect(200);
+      expect(await setPresence(AGENT_1, 'accepting')).toBe(200);
+      expect(await setPresence(AGENT_2, 'accepting')).toBe(200);
+
+      const result = await scheduler.runOnce(NOW);
+      // Both seats are equally idle, so an unweighted sweep would have broken the
+      // tie on member id and chosen AGENT_1 — this answer is the weight's.
+      expect(result.assigned).toEqual([POOLED]);
+      expect(store.getConversation(T1, POOLED)?.assignedMemberId).toBe(AGENT_2);
+    });
+
+    it('falls back to the offline reply when every seat weighs zero', async () => {
+      await putRouting([
+        { member_id: AGENT_1, weight: 0 },
+        { member_id: AGENT_2, weight: 0 },
+      ]).expect(200);
+      expect(await setPresence(AGENT_1, 'accepting')).toBe(200);
+      expect(await setPresence(AGENT_2, 'accepting')).toBe(200);
+
+      const result = await scheduler.runOnce(NOW);
+      // Both seats are online and accepting, and the customer is still told
+      // nobody can take the conversation: weight zero means zero.
+      expect(result.assigned).toEqual([]);
+      expect(result.fellBack).toEqual([POOLED]);
+      expect(store.getConversation(T1, POOLED)?.assignedMemberId).toBeNull();
+    });
+
+    it('refuses a weight for a member who is not an agent of the tenant', async () => {
+      const unknown = await putRouting([{ member_id: 'u-t1-admin', weight: 2 }]).expect(400);
+      expect((unknown.body as ErrorEnvelope).code).toBe('bad_request');
+      const elsewhere = await putRouting([{ member_id: 'u-t2-agent-1', weight: 2 }]).expect(400);
+      expect((elsewhere.body as ErrorEnvelope).code).toBe('bad_request');
+      const stranger = await putRouting([{ member_id: 'nobody', weight: 2 }]).expect(400);
+      expect((stranger.body as ErrorEnvelope).code).toBe('bad_request');
+    });
+
+    it('refuses a weight that is not a whole number of shares', async () => {
+      const fractional = await putRouting([{ member_id: AGENT_1, weight: 1.5 }]).expect(400);
+      expect((fractional.body as ErrorEnvelope).code).toBe('bad_request');
+      const negative = await putRouting([{ member_id: AGENT_1, weight: -1 }]).expect(400);
+      expect((negative.body as ErrorEnvelope).code).toBe('bad_request');
+      const tooLarge = await putRouting([{ member_id: AGENT_1, weight: 1001 }]).expect(400);
+      expect((tooLarge.body as ErrorEnvelope).code).toBe('bad_request');
+    });
+
+    it('refuses an agent both the read and the write', async () => {
+      const read = await request(app.getHttpServer())
+        .get('/api/v1/assignment/routing')
+        .set('x-member-id', AGENT_1)
+        .set('x-tenant-id', T1)
+        .expect(403);
+      expect((read.body as ErrorEnvelope).code).toBe('forbidden');
+      const write = await request(app.getHttpServer())
+        .put('/api/v1/assignment/routing')
+        .set('x-member-id', AGENT_1)
+        .set('x-tenant-id', T1)
+        .send({ weights: [{ member_id: AGENT_1, weight: 9 }] })
+        .expect(403);
+      expect((write.body as ErrorEnvelope).code).toBe('forbidden');
+      // The refusal is a refusal: nothing was stored under the agent's name.
+      const seats = await readRouting();
+      expect(seatOf(seats, AGENT_1)).toMatchObject({ weight: 1, configured: false });
+    });
+
+    it('records the change in the audit trail', async () => {
+      await putRouting([{ member_id: AGENT_2, weight: 3 }]).expect(200);
+
+      const entry = store
+        .listAudit(T1)
+        .find((row) => row.action === 'assignment.routing.updated');
+      expect(entry).toMatchObject({
+        actorMemberId: SEEDED_PLATFORM_ADMIN_MEMBER_ID,
+        targetType: 'conversation_routing_weights',
+        targetId: T1,
+      });
+    });
   });
 });

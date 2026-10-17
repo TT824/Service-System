@@ -34,9 +34,22 @@ const KNOWN_ERROR_CODES: ReadonlySet<string> = new Set<ApiErrorCode>([
   'service_unavailable',
   'gateway_timeout',
   'config_error',
+  'account_locked',
   'channel_disabled',
   'channel_not_configured',
 ]);
+
+/**
+ * Messages that say more than the status code can.
+ *
+ * Almost every failure is described by its status, so the wording stays generic
+ * and no credential detail can leak. A locked account is the exception the
+ * caller has to act on: "Unauthorized" reads as "wrong password", and the one
+ * thing that cannot work while locked is retrying with the right one.
+ */
+const MESSAGE_BY_CODE: Readonly<Record<string, string>> = Object.freeze({
+  account_locked: 'Account Locked',
+});
 
 /**
  * Global exception filter that converts every error into the documented stable
@@ -79,7 +92,6 @@ export class AllExceptionsFilter implements ExceptionFilter {
   private toErrorBody(exception: HttpException, status: number, requestId: string): ApiErrorBody {
     const code = errorCodeForHttpStatus(status);
     const payload = exception.getResponse();
-    const message = publicMessageForStatus(status);
     let details: ReadonlyArray<unknown> = [];
     let effectiveCode = code;
 
@@ -96,7 +108,7 @@ export class AllExceptionsFilter implements ExceptionFilter {
     return buildApiErrorBody({
       requestId,
       code: effectiveCode,
-      message,
+      message: MESSAGE_BY_CODE[effectiveCode] ?? publicMessageForStatus(status),
       details,
     });
   }

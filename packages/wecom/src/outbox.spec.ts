@@ -15,6 +15,7 @@ import {
   MockWecomAdapter,
   WECOM_AUTH_REPLAY_ATTEMPTS,
   WECOM_MAX_REQUESTS_PER_SEND,
+  WECOM_FILE_MAX_BYTES,
   WECOM_MAX_REQUESTS_PER_UPLOAD,
   WECOM_MEDIA_MAX_BYTES,
   WECOM_OUTBOUND_CAPABILITIES,
@@ -451,6 +452,37 @@ describe('WeCom outbound payload and account mapping', () => {
     });
   });
 
+  it('builds a video and a file payload from the same kind of media id', () => {
+    // The three media kinds differ only in the key the provider wants the id
+    // under, so one upload result can serve any of them.
+    expect(
+      wecomOutboundPayload(
+        sendInput({
+          messageType: 'video',
+          media: { mediaId: 'media-2', mimeType: 'video/mp4' },
+        }),
+      ),
+    ).toEqual({ ok: true, value: { msgtype: 'video', video: { media_id: 'media-2' } } });
+    expect(
+      wecomOutboundPayload(
+        sendInput({
+          messageType: 'file',
+          media: { mediaId: 'media-3', mimeType: 'application/pdf' },
+        }),
+      ),
+    ).toEqual({ ok: true, value: { msgtype: 'file', file: { media_id: 'media-3' } } });
+  });
+
+  it('refuses a video and a file payload with no media id', () => {
+    for (const messageType of ['video', 'file'] as const) {
+      expect(wecomOutboundPayload(sendInput({ messageType, media: null }))).toMatchObject({
+        ok: false,
+        code: 'channel_invalid_request',
+        retryable: false,
+      });
+    }
+  });
+
   it('recovers an account id only from a well-formed conversation id', () => {
     expect(openKfIdOfConversation('wkCONV01:customer-1')).toBe('wkCONV01');
     expect(openKfIdOfConversation('wk_a-b:customer-1')).toBe('wk_a-b');
@@ -503,7 +535,7 @@ describe('WecomMediaUploader request construction', () => {
     const uploader = buildUploader(http);
     const bytes = new Uint8Array([0x89, 0x50, 0x4e, 0x47]);
 
-    const result = await uploader.uploadMedia({ mimeType: 'image/png', bytes });
+    const result = await uploader.uploadMedia({ kind: 'image', mimeType: 'image/png', bytes });
 
     expect(result).toEqual({ ok: true, value: { mediaId: 'media-1' } });
     expect(http.uploadRequests).toHaveLength(1);
@@ -531,10 +563,14 @@ describe('WecomMediaUploader request construction', () => {
     const uploader = buildUploader(http);
 
     for (const input of [
-      { mimeType: 'application/pdf', bytes: new Uint8Array([1]) },
-      { mimeType: 'image/png', bytes: new Uint8Array(0) },
-      { mimeType: 'image/png', bytes: new Uint8Array(WECOM_MEDIA_MAX_BYTES + 1) },
-    ]) {
+      { kind: 'image', mimeType: 'application/pdf', bytes: new Uint8Array([1]) },
+      { kind: 'image', mimeType: 'image/png', bytes: new Uint8Array(0) },
+      {
+        kind: 'image',
+        mimeType: 'image/png',
+        bytes: new Uint8Array(WECOM_MEDIA_MAX_BYTES + 1),
+      },
+    ] as const) {
       expect(await uploader.uploadMedia(input)).toMatchObject({
         ok: false,
         code: 'channel_invalid_request',
@@ -551,7 +587,7 @@ describe('WecomMediaUploader request construction', () => {
     const uploader = buildUploader(http, { credentials: unconfiguredReader('WECOM_KF_SECRET') });
 
     expect(
-      await uploader.uploadMedia({ mimeType: 'image/png', bytes: new Uint8Array([1]) }),
+      await uploader.uploadMedia({ kind: 'image', mimeType: 'image/png', bytes: new Uint8Array([1]) }),
     ).toMatchObject({ ok: false, code: 'channel_not_configured', retryable: false });
     expect(http.requests).toHaveLength(0);
   });
@@ -560,6 +596,7 @@ describe('WecomMediaUploader request construction', () => {
     const http = new FakeWecomHttp();
     http.scriptUpload(() => uploadErrcode(40001));
     const refused = await buildUploader(http).uploadMedia({
+      kind: 'image',
       mimeType: 'image/png',
       bytes: new Uint8Array([1]),
     });
@@ -573,7 +610,7 @@ describe('WecomMediaUploader request construction', () => {
     // change, so it must be classified once and never replayed.
     http.scriptUpload(() => uploadErrcode(40006));
     expect(
-      await buildUploader(http).uploadMedia({ mimeType: 'image/png', bytes: new Uint8Array([1]) }),
+      await buildUploader(http).uploadMedia({ kind: 'image', mimeType: 'image/png', bytes: new Uint8Array([1]) }),
     ).toMatchObject({ ok: false, code: 'channel_invalid_request', retryable: false });
   });
 
@@ -582,7 +619,7 @@ describe('WecomMediaUploader request construction', () => {
     http.scriptUpload(() => ({ status: 200, body: { errcode: 0, errmsg: 'ok' } }));
 
     expect(
-      await buildUploader(http).uploadMedia({ mimeType: 'image/png', bytes: new Uint8Array([1]) }),
+      await buildUploader(http).uploadMedia({ kind: 'image', mimeType: 'image/png', bytes: new Uint8Array([1]) }),
     ).toEqual({
       ok: false,
       code: 'channel_provider_error',
@@ -598,7 +635,7 @@ describe('WecomMediaUploader request construction', () => {
     });
 
     expect(
-      await buildUploader(http).uploadMedia({ mimeType: 'image/jpeg', bytes: new Uint8Array([1]) }),
+      await buildUploader(http).uploadMedia({ kind: 'image', mimeType: 'image/jpeg', bytes: new Uint8Array([1]) }),
     ).toEqual({
       ok: false,
       code: 'channel_provider_error',
@@ -612,7 +649,7 @@ describe('WecomMediaUploader request construction', () => {
     http.scriptUpload(() => ({ status: 502, body: 'bad gateway' }));
 
     expect(
-      await buildUploader(http).uploadMedia({ mimeType: 'image/png', bytes: new Uint8Array([1]) }),
+      await buildUploader(http).uploadMedia({ kind: 'image', mimeType: 'image/png', bytes: new Uint8Array([1]) }),
     ).toEqual({
       ok: false,
       code: 'channel_provider_error',
@@ -628,9 +665,96 @@ describe('WecomMediaUploader request construction', () => {
     });
 
     expect(
-      await buildUploader(http).uploadMedia({ mimeType: 'image/png', bytes: new Uint8Array([1]) }),
+      await buildUploader(http).uploadMedia({ kind: 'image', mimeType: 'image/png', bytes: new Uint8Array([1]) }),
     ).toMatchObject({ ok: false, code: 'channel_provider_error', retryable: true });
     expect(http.uploadRequests).toHaveLength(0);
+  });
+
+  it('uploads a video and a file under their own provider types', async () => {
+    const http = new FakeWecomHttp();
+    const uploader = buildUploader(http);
+
+    await uploader.uploadMedia({
+      kind: 'video',
+      mimeType: 'video/mp4',
+      bytes: new Uint8Array([1, 2, 3]),
+    });
+    await uploader.uploadMedia({
+      kind: 'file',
+      mimeType: 'application/pdf',
+      bytes: new Uint8Array([4, 5, 6]),
+      fileName: '报价单.pdf',
+    });
+
+    // The `type` in the query string is what the provider measures the payload
+    // against, so it follows the kind and never the MIME type.
+    expect(http.uploadRequests[0]?.url).toContain('type=video');
+    expect(http.uploadRequests[0]?.multipart).toMatchObject({ filename: 'wecom-video.mp4' });
+    expect(http.uploadRequests[1]?.url).toContain('type=file');
+    // A file's name is the name the customer sees on what arrives, so it is the
+    // sender's own; an image or a video only needs a plausible name.
+    expect(http.uploadRequests[1]?.multipart).toMatchObject({
+      filename: '报价单.pdf',
+      contentType: 'application/pdf',
+    });
+  });
+
+  it('reduces a file name to a base name a part header can carry', async () => {
+    const http = new FakeWecomHttp();
+    const uploader = buildUploader(http);
+
+    for (const given of [
+      'C:\\Users\\agent\\报价单.xlsx',
+      '../secret.pdf',
+      '报价\u0000单.pdf',
+    ]) {
+      const result = await uploader.uploadMedia({
+        kind: 'file',
+        mimeType: 'application/octet-stream',
+        bytes: new Uint8Array([1, 2, 3]),
+        fileName: given,
+      });
+      expect(result).toMatchObject({ ok: true });
+    }
+
+    expect(http.uploadRequests.map((request) => request.multipart?.filename)).toEqual([
+      '报价单.xlsx',
+      'secret.pdf',
+      '报价单.pdf',
+    ]);
+  });
+
+  it('refuses a payload its kind cannot carry before any provider call', async () => {
+    const http = new FakeWecomHttp();
+    const uploader = buildUploader(http);
+
+    // A video is MP4 only and an image has to be an image, while a file is
+    // taken as it is — which is the only reason `type=file` exists.
+    await expect(
+      uploader.uploadMedia({
+        kind: 'video',
+        mimeType: 'video/quicktime',
+        bytes: new Uint8Array([1, 2, 3]),
+      }),
+    ).resolves.toMatchObject({ ok: false, code: 'channel_invalid_request' });
+    await expect(
+      uploader.uploadMedia({
+        kind: 'image',
+        mimeType: 'application/pdf',
+        bytes: new Uint8Array([1, 2, 3]),
+      }),
+    ).resolves.toMatchObject({ ok: false, code: 'channel_invalid_request' });
+    await expect(
+      uploader.uploadMedia({
+        kind: 'file',
+        mimeType: 'application/pdf',
+        bytes: new Uint8Array(WECOM_FILE_MAX_BYTES + 1),
+      }),
+    ).resolves.toMatchObject({ ok: false, code: 'channel_invalid_request' });
+
+    // A refusal that costs nothing: no upload, and not even a token.
+    expect(http.uploadRequests).toHaveLength(0);
+    expect(http.tokenRequests).toHaveLength(0);
   });
 
   it('maps provider codes onto stable channel failures', () => {
@@ -651,6 +775,7 @@ describe('WecomMediaUploader replay after an authentication failure', () => {
     );
 
     const result = await buildUploader(http).uploadMedia({
+      kind: 'image',
       mimeType: 'image/png',
       bytes: new Uint8Array([1, 2, 3]),
     });
@@ -669,7 +794,7 @@ describe('WecomMediaUploader replay after an authentication failure', () => {
     http.scriptUpload(() => uploadErrcode(40014));
 
     expect(
-      await buildUploader(http).uploadMedia({ mimeType: 'image/png', bytes: new Uint8Array([1]) }),
+      await buildUploader(http).uploadMedia({ kind: 'image', mimeType: 'image/png', bytes: new Uint8Array([1]) }),
     ).toMatchObject({ ok: false, code: 'channel_not_configured', retryable: false });
     expect(http.requests).toHaveLength(WECOM_MAX_REQUESTS_PER_UPLOAD);
     expect(WECOM_MAX_REQUESTS_PER_UPLOAD).toBe(4);
@@ -679,7 +804,7 @@ describe('WecomMediaUploader replay after an authentication failure', () => {
     const http = new FakeWecomHttp();
     http.scriptUpload(() => uploadErrcode(40006));
 
-    await buildUploader(http).uploadMedia({ mimeType: 'image/png', bytes: new Uint8Array([1]) });
+    await buildUploader(http).uploadMedia({ kind: 'image', mimeType: 'image/png', bytes: new Uint8Array([1]) });
 
     expect(http.uploadRequests).toHaveLength(1);
   });

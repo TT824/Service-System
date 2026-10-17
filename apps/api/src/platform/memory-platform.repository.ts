@@ -25,6 +25,7 @@ import {
   type CategoryAttribute,
   type Conversation,
   type ConversationAssignment,
+  type ConversationRoutingWeight,
   type DispatchOutcome,
   type FaqItem,
   type FaqItemPatch,
@@ -33,6 +34,9 @@ import {
   type ImportBatchWithErrors,
   type IngestResult,
   type InboundMessageInput,
+  type InternalAttachmentRecord,
+  type InternalMessage,
+  type InternalThread,
   type KnowledgeIndexStatusFilter,
   type KnowledgeIndexStatusSummary,
   type Member,
@@ -45,6 +49,8 @@ import {
   type NewProductSku,
   type NewProductSpu,
   type OutboundMessageInput,
+  type PersonalPhrase,
+  type PersonalPhrasePatch,
   type Product,
   type ProductCategory,
   type ProductImportBatch,
@@ -67,12 +73,17 @@ import {
 } from '@kefu/core';
 import type {
   AppendAuditRecord,
+  AppendInternalMessageRecord,
   CreateFaqRecord,
+  CreateInternalAttachmentRecord,
+  CreatePersonalPhraseRecord,
   CreateProductRecord,
   CreateShortcutRecord,
   CreateSuggestionSetRecord,
   DispatchDueInput,
+  EnsureDirectInternalThreadRecord,
   PlatformRepository,
+  SaveRoutingWeightsRecord,
   SetAgentPresenceRecord,
 } from './platform-repository';
 
@@ -115,6 +126,11 @@ export class MemoryPlatformRepository implements PlatformRepository {
   /** @inheritdoc */
   async listMembers(tenantId: string): Promise<ReadonlyArray<Member>> {
     return this.store.listMembers(tenantId);
+  }
+
+  /** @inheritdoc */
+  async listPlatformAdministrators(): Promise<ReadonlyArray<Member>> {
+    return this.store.listPlatformAdministrators();
   }
 
   // --------------------------------------------------------------------------
@@ -206,6 +222,53 @@ export class MemoryPlatformRepository implements PlatformRepository {
     return this.store.updateShortcut({
       tenantId,
       shortcutId,
+      patch,
+      ...(now === undefined ? {} : { now }),
+    });
+  }
+
+  /** @inheritdoc */
+  async listPersonalPhrases(
+    tenantId: string,
+    memberId: string,
+  ): Promise<ReadonlyArray<PersonalPhrase>> {
+    return this.store.listPersonalPhrases(tenantId, memberId);
+  }
+
+  /** @inheritdoc */
+  async getPersonalPhrase(
+    tenantId: string,
+    memberId: string,
+    phraseId: string,
+  ): Promise<PersonalPhrase | undefined> {
+    return this.store.getPersonalPhrase(tenantId, memberId, phraseId);
+  }
+
+  /** @inheritdoc */
+  async createPersonalPhrase(input: CreatePersonalPhraseRecord): Promise<PersonalPhrase> {
+    return this.store.createPersonalPhrase({
+      tenantId: input.tenantId,
+      memberId: input.memberId,
+      category: input.category,
+      title: input.title,
+      keywords: input.keywords,
+      text: input.text,
+      ...(input.now === undefined ? {} : { now: input.now }),
+    });
+  }
+
+  /** @inheritdoc */
+  async updatePersonalPhrase(
+    tenantId: string,
+    memberId: string,
+    phraseId: string,
+    patch: PersonalPhrasePatch,
+    now?: string,
+  ): Promise<PersonalPhrase | undefined> {
+    return this.store.updatePersonalPhrase({
+      tenantId,
+      memberId,
+      phraseId,
       patch,
       ...(now === undefined ? {} : { now }),
     });
@@ -605,6 +668,18 @@ export class MemoryPlatformRepository implements PlatformRepository {
   }
 
   /** @inheritdoc */
+  async listRoutingWeights(tenantId: string): Promise<ReadonlyArray<ConversationRoutingWeight>> {
+    return this.store.listRoutingWeights(tenantId);
+  }
+
+  /** @inheritdoc */
+  async saveRoutingWeights(
+    input: SaveRoutingWeightsRecord,
+  ): Promise<ReadonlyArray<ConversationRoutingWeight>> {
+    return this.store.saveRoutingWeights(input);
+  }
+
+  /** @inheritdoc */
   async dispatchDue(input: DispatchDueInput): Promise<ReadonlyArray<DispatchOutcome>> {
     return this.store.dispatchDue(input);
   }
@@ -682,5 +757,75 @@ export class MemoryPlatformRepository implements PlatformRepository {
   /** @inheritdoc */
   async summarizeRetention(tenantId: string, now: string): Promise<RetentionSummary> {
     return this.store.summarizeRetention(tenantId, now);
+  }
+
+  // --------------------------------------------------------------------------
+  // Internal collaboration
+  // --------------------------------------------------------------------------
+
+  /** @inheritdoc */
+  async listInternalThreads(
+    tenantId: string,
+    memberId: string,
+  ): Promise<ReadonlyArray<InternalThread>> {
+    return this.store.listInternalThreads(tenantId, memberId);
+  }
+
+  /** @inheritdoc */
+  async getInternalThread(
+    tenantId: string,
+    threadId: string,
+  ): Promise<InternalThread | undefined> {
+    return this.store.getInternalThread(tenantId, threadId);
+  }
+
+  /** @inheritdoc */
+  async ensureDirectInternalThread(input: EnsureDirectInternalThreadRecord): Promise<InternalThread> {
+    return this.store.ensureDirectInternalThread(input);
+  }
+
+  /** @inheritdoc */
+  async listInternalMessages(
+    tenantId: string,
+    threadId: string,
+  ): Promise<ReadonlyArray<InternalMessage>> {
+    return this.store.listInternalMessages(tenantId, threadId);
+  }
+
+  /** @inheritdoc */
+  async appendInternalMessage(input: AppendInternalMessageRecord): Promise<InternalMessage | undefined> {
+    return this.store.appendInternalMessage({
+      tenantId: input.tenantId,
+      threadId: input.threadId,
+      senderMemberId: input.senderMemberId,
+      body: input.body,
+      attachmentId: input.attachmentId,
+      now: input.createdAt,
+    });
+  }
+
+  /** @inheritdoc */
+  async createInternalAttachment(
+    input: CreateInternalAttachmentRecord,
+  ): Promise<InternalAttachmentRecord> {
+    return this.store.createInternalAttachment({
+      id: input.id,
+      tenantId: input.tenantId,
+      threadId: input.threadId,
+      uploaderMemberId: input.uploaderMemberId,
+      kind: input.kind,
+      fileName: input.fileName,
+      mimeType: input.mimeType,
+      byteSize: input.byteSize,
+      objectKey: input.objectKey,
+      now: input.createdAt,
+    });
+  }
+
+  async getInternalMessageAttachment(
+    tenantId: string,
+    messageId: string,
+  ): Promise<InternalAttachmentRecord | undefined> {
+    return this.store.getInternalMessageAttachment(tenantId, messageId);
   }
 }

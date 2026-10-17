@@ -76,6 +76,11 @@ import {
 } from './channel-reliability.repository';
 import { ChannelsController } from './channels.controller';
 import { ChannelsService } from './channels.service';
+import { fetchWecomCallbackProbe } from './fetch-wecom-callback-probe';
+import {
+  WECOM_CALLBACK_PROBE,
+  WecomCallbackSelfCheckService,
+} from './wecom-callback-selfcheck.service';
 import { MemoryChannelReliabilityRepository } from './memory-channel-reliability.repository';
 import { MemoryWecomBindingRepository } from './memory-wecom-binding.repository';
 import { MemoryWecomCredentialRepository } from './memory-wecom-credential.repository';
@@ -131,6 +136,20 @@ const channelReliabilityRepositoryProvider: Provider = {
 const wecomHttpClientProvider: Provider = {
   provide: WECOM_HTTP_CLIENT,
   useFactory: (): WecomHttpClient => new FetchWecomHttpClient(),
+};
+
+/**
+ * Outbound probe of an operator-supplied callback URL.
+ *
+ * Bound as a value rather than as a class Nest constructs, because the port is a
+ * function: it is the shape the self-check is written against, and a test
+ * replacing it with a fake is replacing the whole network half of the check.
+ * The URL is a human's, not WeCom's, so it is requested with a redirect refused
+ * — see {@link fetchWecomCallbackProbe}.
+ */
+const wecomCallbackProbeProvider: Provider = {
+  provide: WECOM_CALLBACK_PROBE,
+  useValue: fetchWecomCallbackProbe,
 };
 
 /**
@@ -314,6 +333,7 @@ const wecomCredentialReaderProvider: Provider = {
   providers: [
     ChannelsService,
     wecomHttpClientProvider,
+    wecomCallbackProbeProvider,
     wecomTokenCacheProvider,
     wecomTokenProviderProvider,
     wecomScopeResolverProvider,
@@ -325,6 +345,7 @@ const wecomCredentialReaderProvider: Provider = {
     wecomCredentialReaderProvider,
     ChannelDeliveryService,
     WecomSyncService,
+    WecomCallbackSelfCheckService,
   ],
   exports: [ChannelDeliveryService, WECOM_CREDENTIAL_READER],
 })

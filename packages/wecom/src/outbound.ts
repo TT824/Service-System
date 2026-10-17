@@ -43,13 +43,23 @@ const SEND_URL = 'https://qyapi.weixin.qq.com/cgi-bin/kf/send_msg';
 const UPLOAD_URL = 'https://qyapi.weixin.qq.com/cgi-bin/media/upload';
 
 /**
- * The one media `type` this transport uploads.
+ * The media kinds this transport uploads, named the way the provider names them.
  *
- * `media/upload` also accepts voice, video and file, but the customer-service
- * send path this platform wires only ever sends an image, so uploading anything
- * else would produce a `media_id` no live code path could use.
+ * `media/upload` takes exactly one `type` per request, and the type decides both
+ * the ceiling and the container the provider accepts — so the kind travels with
+ * the bytes instead of being re-derived from the MIME type at the last moment.
+ * Voice is deliberately absent: nothing in this platform sends one, and an
+ * upload no send can point at is an access token and a quota unit spent for
+ * nothing.
  */
-const UPLOAD_TYPE = 'image';
+export type WecomMediaKind = 'image' | 'video' | 'file';
+
+/** The `type` query parameter of each uploadable kind. */
+const UPLOAD_TYPE_OF: Readonly<Record<WecomMediaKind, string>> = {
+  image: 'image',
+  video: 'video',
+  file: 'file',
+};
 
 /** Form field the provider reads the uploaded file from. */
 const UPLOAD_MEDIA_FIELD = 'media';
@@ -71,6 +81,36 @@ const REQUESTS_PER_UPLOAD_ATTEMPT = 2;
  * a customer-service quota unit — from leaving the process at all.
  */
 export const WECOM_MEDIA_MAX_BYTES = 10 * 1024 * 1024;
+
+/**
+ * Largest video payload this transport will hand to WeCom.
+ *
+ * The same 10 MB ceiling an image has, and MP4 is the only container WeCom
+ * takes for `type=video`; both bounds live in {@link mediaUploadRejection}.
+ */
+export const WECOM_VIDEO_MAX_BYTES = 10 * 1024 * 1024;
+
+/**
+ * Largest file payload this transport will hand to WeCom.
+ *
+ * WeCom documents a 20 MB ceiling for `type=file`. Above it the provider can
+ * still answer, but with an errcode that names neither the limit nor the file,
+ * so the refusal is made here where the message can be specific.
+ */
+export const WECOM_FILE_MAX_BYTES = 20 * 1024 * 1024;
+
+/**
+ * The ceiling WeCom documents for each uploadable kind.
+ *
+ * Kept beside the sizes themselves because the ceiling and the `type` a payload
+ * is uploaded as are one decision: the provider measures the bytes against the
+ * type the request named, so a kind is only honest if both travel together.
+ */
+const UPLOAD_MAX_BYTES_OF: Readonly<Record<WecomMediaKind, number>> = {
+  image: WECOM_MEDIA_MAX_BYTES,
+  video: WECOM_VIDEO_MAX_BYTES,
+  file: WECOM_FILE_MAX_BYTES,
+};
 
 /**
  * Replays {@link WecomOutboundSender.sendMessage} permits after an authentication
@@ -315,12 +355,25 @@ export function wecomOutboundPayload(
         ok: true,
         value: { msgtype: 'link', link: { title: input.content, url: input.content } },
       };
-    case 'image': {
+    case 'image':
+    case 'video':
+    case 'file': {
       const mediaId = input.media?.mediaId;
       if (mediaId === undefined || mediaId.trim().length === 0) {
-        return wecomInvalid('an image delivery requires an uploaded media id');
+        // A media send carries nothing but the id of an upload, so a delivery
+        // that arrives without one has no body to build. Refusing is the only
+        // honest answer: the alternative is a provider call that can only fail
+        // after the customer-service quota has been spent on it.
+        return wecomInvalid(
+          `a WeCom ${input.messageType} delivery requires an uploaded media id`,
+        );
       }
-      return { ok: true, value: { msgtype: 'image', image: { media_id: mediaId } } };
+      // The three kinds differ only in the key their payload nests under;
+      // WeCom takes one `media_id` for each, and nothing else.
+      return {
+        ok: true,
+        value: { msgtype: input.messageType, [input.messageType]: { media_id: mediaId } },
+      };
     }
   }
 }
@@ -399,24 +452,26 @@ function wecomInvalid<T>(message: string): ChannelResult<T> {
 // ---------------------------------------------------------------------------
 
 /**
- * The media seam every image delivery goes through.
+ * The media seam every media delivery goes through.
  *
- * A `msgtype: image` send carries only a provider `media_id`, so an image
- * delivery is two provider calls: upload the bytes, then send the id. Publishing
- * the upload as its own port is what lets the adapter that owns the customer-
- * service account also own the upload, without any caller having to know the
- * endpoint, the multipart field or how a rejected upload is classified.
+ * An `image`, `video` or `file` send carries only a provider `media_id`, so a
+ * media delivery is two provider calls: upload the bytes, then send the id.
+ * Publishing the upload as its own port is what lets the adapter that owns the
+ * customer-service account also own the upload, without any caller having to
+ * know the endpoint, the multipart field or how a rejected upload is classified.
  */
 export interface WecomMediaUploadTransport {
   /**
-   * Upload one image to the provider and return its temporary `media_id`.
+   * Upload one payload to the provider and return its temporary `media_id`.
    *
-   * @param input - Image MIME type and bytes.
+   * @param input - Kind, MIME type and bytes; a file's own name, if it has one.
    * @returns The provider media id, or a stable channel failure.
    */
   uploadMedia(input: {
+    readonly kind: WecomMediaKind;
     readonly mimeType: string;
     readonly bytes: Uint8Array;
+    readonly fileName?: string;
   }): Promise<ChannelResult<UploadMediaResult>>;
 }
 
@@ -440,13 +495,16 @@ type UploadAttempt = {
 };
 
 /**
- * Uploads one image through `media/upload`.
+ * Uploads one payload through `media/upload`.
  *
- * The access token comes from the same {@link WecomTokenProvider} the send path
- * uses, so the cache, the expiry margin and the refresh policy stay in one
- * place. An authentication failure costs exactly one refresh and one replay, for
- * the same reason a send does: a credential the provider has just rejected twice
- * will not become valid on a third try, so anything else would be a loop.
+ * The kind chooses the `type` the provider is asked for, which is also what
+ * decides the ceiling and the container: the same bytes are a legal image and an
+ * illegal video. The access token comes from the same {@link WecomTokenProvider}
+ * the send path uses, so the cache, the expiry margin and the refresh policy
+ * stay in one place. An authentication failure costs exactly one refresh and one
+ * replay, for the same reason a send does: a credential the provider has just
+ * rejected twice will not become valid on a third try, so anything else would be
+ * a loop.
  *
  * Nothing about the payload or the answer leaves this class except a `media_id`
  * or a stable failure: the token is never carried into a message, the bytes are
@@ -466,8 +524,10 @@ export class WecomMediaUploader implements WecomMediaUploadTransport {
 
   /** @inheritdoc */
   async uploadMedia(input: {
+    readonly kind: WecomMediaKind;
     readonly mimeType: string;
     readonly bytes: Uint8Array;
+    readonly fileName?: string;
   }): Promise<ChannelResult<UploadMediaResult>> {
     const account = await useWecomCredentials(this.options.credentials);
     if (account._tag === 'refused') {
@@ -491,8 +551,10 @@ export class WecomMediaUploader implements WecomMediaUploadTransport {
 
   /** Perform one `media/upload` call, reporting the provider's `errcode` too. */
   async #uploadOnce(input: {
+    readonly kind: WecomMediaKind;
     readonly mimeType: string;
     readonly bytes: Uint8Array;
+    readonly fileName?: string;
   }): Promise<UploadAttempt> {
     const token = await this.tokens.get();
     if (!token.ok) {
@@ -503,10 +565,10 @@ export class WecomMediaUploader implements WecomMediaUploadTransport {
     try {
       const response = await this.http.send({
         method: 'POST',
-        url: `${UPLOAD_URL}?access_token=${encodeURIComponent(token.value)}&type=${UPLOAD_TYPE}`,
+        url: `${UPLOAD_URL}?access_token=${encodeURIComponent(token.value)}&type=${UPLOAD_TYPE_OF[input.kind]}`,
         multipart: {
           field: UPLOAD_MEDIA_FIELD,
-          filename: mediaFilename(input.mimeType),
+          filename: mediaFilename(input.kind, input.mimeType, input.fileName),
           contentType: input.mimeType,
           bytes: input.bytes,
         },
@@ -573,24 +635,33 @@ export class WecomMediaUploader implements WecomMediaUploadTransport {
  * platform built wrongly, not a provider that misbehaved, and no provider call
  * is made to discover them.
  *
- * @param input - Image MIME type and bytes.
+ * @param input - Kind, MIME type and bytes.
  * @returns The stable refusal, or `null` when the payload may be uploaded.
  */
 function mediaUploadRejection(input: {
+  readonly kind: WecomMediaKind;
   readonly mimeType: string;
   readonly bytes: Uint8Array;
 }): ChannelResult<never> | null {
-  if (!input.mimeType.toLowerCase().startsWith('image/')) {
-    // The upload endpoint is called with `type=image`, so a payload that is not
-    // an image could only be rejected by the provider after the call.
-    return wecomInvalid(`a WeCom media upload carries an image, not '${input.mimeType}'`);
+  const maxBytes = UPLOAD_MAX_BYTES_OF[input.kind];
+  // The `type` in the query string is what the provider measures the bytes
+  // against, so a payload of the wrong family is one the call cannot succeed
+  // with — and finding that out from the provider costs an access token and a
+  // customer-service quota unit first. A file is the exception: `type=file`
+  // takes whatever the sender picked, which is the whole reason it exists.
+  const family =
+    input.kind === 'video' ? 'video/mp4' : input.kind === 'image' ? 'image/' : null;
+  if (family !== null && !input.mimeType.toLowerCase().startsWith(family)) {
+    return wecomInvalid(
+      `a WeCom ${input.kind} upload carries ${family} bytes, not '${input.mimeType}'`,
+    );
   }
   if (input.bytes.byteLength === 0) {
-    return wecomInvalid('a WeCom media upload requires a non-empty image payload');
+    return wecomInvalid(`a WeCom ${input.kind} upload requires a non-empty payload`);
   }
-  if (input.bytes.byteLength > WECOM_MEDIA_MAX_BYTES) {
+  if (input.bytes.byteLength > maxBytes) {
     return wecomInvalid(
-      `the image payload exceeds the ${WECOM_MEDIA_MAX_BYTES}-byte limit of a WeCom temporary image`,
+      `the ${input.kind} payload exceeds the ${maxBytes}-byte limit of a WeCom temporary ${input.kind}`,
     );
   }
   return null;
@@ -599,19 +670,52 @@ function mediaUploadRejection(input: {
 /**
  * The file name presented in the multipart part header.
  *
- * WeCom reads the bytes and ignores the name, but a part header has to carry
- * one. It is derived from the MIME type so it stays a plausible file name, and
- * never from anything the caller typed.
+ * An image or a video is measured by its bytes and the part header only has to
+ * carry a plausible name, so that name is derived from the MIME type and never
+ * from anything the sender typed. A file is the exception: the name in this
+ * header is the name the customer sees on the file that arrives, so there the
+ * sender's own file name is used, reduced to something a header can carry.
  *
- * @param mimeType - Image MIME type already validated by {@link mediaUploadRejection}.
+ * @param kind - Which of the three uploads this name is for.
+ * @param mimeType - MIME type already validated by {@link mediaUploadRejection}.
+ * @param fileName - The sender's own file name, for a `file` upload.
  * @returns A file name with the subtype as its extension.
  */
-function mediaFilename(mimeType: string): string {
+function mediaFilename(kind: WecomMediaKind, mimeType: string, fileName?: string): string {
+  if (kind === 'file') {
+    return mediaBaseName(fileName);
+  }
   const subtype = mimeType
     .slice(mimeType.indexOf('/') + 1)
     .toLowerCase()
     .replace(/[^a-z0-9]/g, '');
-  return `wecom-image${subtype.length === 0 ? '' : `.${subtype}`}`;
+  return `wecom-${kind}${subtype.length === 0 ? '' : `.${subtype}`}`;
+}
+
+/**
+ * Reduce whatever the sender called a file to a name a part header can carry.
+ *
+ * Only the base name survives: a path separator would put the sender's own
+ * directory layout into a header, and control characters, quotes and a leading
+ * dot go with it, because the name is data the platform displays rather than a
+ * place to smuggle syntax. An empty result falls back to a name that at least
+ * says what the payload is.
+ *
+ * @param fileName - Name as the sender's file had it, if the caller had one.
+ * @returns A non-empty base name of bounded length.
+ */
+function mediaBaseName(fileName: string | undefined): string {
+  const segments = (fileName ?? '').split(/[\\/]/);
+  const last = segments[segments.length - 1] ?? '';
+  // Control characters are dropped by code point rather than by a character
+  // class: a name is displayed text, and a literal one would put a raw newline
+  // or NUL into a header the provider parses.
+  const printed = [...last].filter((character) => {
+    const code = character.codePointAt(0) ?? 0;
+    return code > 0x1f && code !== 0x7f && character !== '"';
+  });
+  const base = printed.join('').replace(/^\.+/, '').trim();
+  return base.length === 0 ? 'wecom-file' : base.slice(0, 120);
 }
 
 /**

@@ -29,9 +29,19 @@
  * deletes the second tenant, and states that a pruned database cannot pass the
  * interface gate).
  *
- * Scope: `tenant-acme` / `store-acme-flagship` / seat `u-t1-agent-2` (`agent01`)
- * only. Nothing here touches another tenant, another store, or the platform
- * administrator, so a failure leaves the other fixtures untouched.
+ * Scope: `tenant-acme` / `store-acme-flagship` and five of its agent seats — the
+ * two fixture seats `agent01` / `agent02` and the four the workspace shows by
+ * name (陈小雨 / 李明 / 王一帆 / 赵萌). Nothing here touches another tenant,
+ * another store, or the platform administrator, so a failure leaves the other
+ * fixtures untouched.
+ *
+ * Why five seats and not one: a seat with no conversation of its own reads an
+ * empty queue, and the workspace hides the *whole* reply area with it — toolbar,
+ * textarea and send button together (`renderMessages` in `apps/web/src/app.js`
+ * hides `.composer` when there is no current conversation). Logging in as one of
+ * the named agents then looks exactly as if the reply toolbar had been removed.
+ * Spreading the demo rows over the seats that are actually logged into keeps that
+ * from being read as a regression in the toolbar itself.
  *
  * Idempotency: every row is inserted with `ON CONFLICT DO NOTHING` under a fixed
  * id, so a repeat run reports `0 inserted` and changes nothing. Timestamps are
@@ -95,18 +105,11 @@ if (fs.existsSync(ROOT_ENV_PATH)) {
   dotenv.config({ path: ROOT_ENV_PATH });
 }
 
-/** Tenant, store and seat the demo is scoped to. All three are `db:seed` fixtures. */
+/** Tenant and store the demo is scoped to. Both are `db:seed` fixtures. */
 const TENANT_ID = 'tenant-acme';
 const STORE_ID = 'store-acme-flagship';
-const SEAT_MEMBER_ID = 'u-t1-agent-2';
 /** The first-phase business channel; conversations outside it are not part of the MVP. */
 const CHANNEL = 'wecom';
-
-/**
- * The seat's display name in the transcript. Mirrors the seeded member name so
- * the workspace shows the same sender the seat account is bound to.
- */
-const SEAT_NAME = '客服小蓝';
 
 /**
  * Spacing between two messages of one conversation, in minutes. Kept small and
@@ -125,8 +128,13 @@ const MINUTES_BETWEEN_MESSAGES = 2;
  * cannot match, so the frontend links a buyer to a conversation by id and then
  * by name; spelling the names identically is what makes that fallback land.
  *
+ * `seatMemberId` / `seatName` are the member the conversation is assigned to and
+ * the display name its own transcript uses. Each name is the seeded member's, so
+ * whichever seat account is logged in sees its replies attributed to itself.
+ *
  * @type {ReadonlyArray<{id: string, title: string, status: 'claimed'|'closed',
- *   externalCustomerId: string, openedMinutesAgo: number,
+ *   seatMemberId: string, seatName: string, externalCustomerId: string,
+ *   openedMinutesAgo: number,
  *   messages: ReadonlyArray<{direction: 'inbound'|'outbound', text: string}>}>}
  */
 const DEMO_CONVERSATIONS = [
@@ -134,6 +142,8 @@ const DEMO_CONVERSATIONS = [
     id: 'demo-conv-lin',
     title: '林女士',
     status: 'claimed',
+    seatMemberId: 'u-t1-agent-2',
+    seatName: '客服小蓝',
     externalCustomerId: 'demo-customer-lin',
     openedMinutesAgo: 64,
     messages: [
@@ -146,6 +156,8 @@ const DEMO_CONVERSATIONS = [
     id: 'demo-conv-zhou',
     title: '周先生',
     status: 'claimed',
+    seatMemberId: 'u-t1-agent-2',
+    seatName: '客服小蓝',
     externalCustomerId: 'demo-customer-zhou',
     openedMinutesAgo: 56,
     messages: [{ direction: 'inbound', text: '发货一般需要多久？' }],
@@ -154,6 +166,8 @@ const DEMO_CONVERSATIONS = [
     id: 'demo-conv-liu',
     title: '刘女士',
     status: 'claimed',
+    seatMemberId: 'u-t1-agent-2',
+    seatName: '客服小蓝',
     externalCustomerId: 'demo-customer-liu',
     openedMinutesAgo: 45,
     messages: [{ direction: 'inbound', text: '有适合送礼的包装吗？' }],
@@ -162,6 +176,8 @@ const DEMO_CONVERSATIONS = [
     id: 'demo-conv-wu',
     title: '吴先生',
     status: 'claimed',
+    seatMemberId: 'u-t1-agent-2',
+    seatName: '客服小蓝',
     externalCustomerId: 'demo-customer-wu',
     openedMinutesAgo: 38,
     messages: [
@@ -173,6 +189,8 @@ const DEMO_CONVERSATIONS = [
     id: 'demo-conv-zhao',
     title: '赵女士',
     status: 'closed',
+    seatMemberId: 'u-t1-agent-2',
+    seatName: '客服小蓝',
     externalCustomerId: 'demo-customer-zhao',
     openedMinutesAgo: 150,
     messages: [
@@ -181,6 +199,121 @@ const DEMO_CONVERSATIONS = [
       { direction: 'inbound', text: '谢谢，已经了解了' },
     ],
   },
+  {
+    id: 'demo-conv-chen-zheng',
+    title: '郑女士',
+    status: 'claimed',
+    seatMemberId: 'u-t1-agent-chen',
+    seatName: '陈小雨',
+    externalCustomerId: 'demo-customer-zheng',
+    openedMinutesAgo: 27,
+    messages: [
+      { direction: 'inbound', text: '杯子可以刻字吗？' },
+      { direction: 'outbound', text: '这款杯身支持定制刻字，下单时备注内容即可。' },
+      { direction: 'inbound', text: '刻字要加钱吗？' },
+    ],
+  },
+  {
+    id: 'demo-conv-chen-sun',
+    title: '孙先生',
+    status: 'closed',
+    seatMemberId: 'u-t1-agent-chen',
+    seatName: '陈小雨',
+    externalCustomerId: 'demo-customer-sun',
+    openedMinutesAgo: 190,
+    messages: [
+      { direction: 'inbound', text: '我用了一周就不保温了' },
+      { direction: 'outbound', text: '抱歉给您添麻烦，我按保修帮您走换货，请留一下订单号。' },
+      { direction: 'inbound', text: '好的，谢谢' },
+    ],
+  },
+  {
+    id: 'demo-conv-li-he',
+    title: '何女士',
+    status: 'claimed',
+    seatMemberId: 'u-t1-agent-li',
+    seatName: '李明',
+    externalCustomerId: 'demo-customer-he',
+    openedMinutesAgo: 33,
+    messages: [
+      { direction: 'inbound', text: '这个杯盖能单独买吗？' },
+      { direction: 'outbound', text: '杯盖有单独的配件链接，我稍后发您。' },
+    ],
+  },
+  {
+    id: 'demo-conv-li-feng',
+    title: '冯先生',
+    status: 'closed',
+    seatMemberId: 'u-t1-agent-li',
+    seatName: '李明',
+    externalCustomerId: 'demo-customer-feng',
+    openedMinutesAgo: 210,
+    messages: [
+      { direction: 'inbound', text: '发票什么时候能开？' },
+      { direction: 'outbound', text: '电子发票在确认收货后自动开出，会发到您的下单邮箱。' },
+    ],
+  },
+  {
+    id: 'demo-conv-wang-gao',
+    title: '高先生',
+    status: 'claimed',
+    seatMemberId: 'u-t1-agent-wang',
+    seatName: '王一帆',
+    externalCustomerId: 'demo-customer-gao',
+    openedMinutesAgo: 21,
+    messages: [
+      { direction: 'inbound', text: '两个一起买有优惠吗？' },
+      { direction: 'outbound', text: '同款第二件有折扣，加购后价格会自动减。' },
+      { direction: 'inbound', text: '好的，我看下' },
+    ],
+  },
+  {
+    id: 'demo-conv-wang-deng',
+    title: '邓女士',
+    status: 'claimed',
+    seatMemberId: 'u-t1-agent-wang',
+    seatName: '王一帆',
+    externalCustomerId: 'demo-customer-deng',
+    openedMinutesAgo: 74,
+    messages: [{ direction: 'inbound', text: '这个颜色有实物图吗？' }],
+  },
+  {
+    id: 'demo-conv-zhao-jiang',
+    title: '蒋先生',
+    status: 'claimed',
+    seatMemberId: 'u-t1-agent-zhao',
+    seatName: '赵萌',
+    externalCustomerId: 'demo-customer-jiang',
+    openedMinutesAgo: 17,
+    messages: [
+      { direction: 'inbound', text: '寄到新疆要多久？' },
+      { direction: 'outbound', text: '偏远地区一般 5 到 7 天，下单时会显示预计送达时间。' },
+    ],
+  },
+  {
+    id: 'demo-conv-zhao-xu',
+    title: '许女士',
+    status: 'closed',
+    seatMemberId: 'u-t1-agent-zhao',
+    seatName: '赵萌',
+    externalCustomerId: 'demo-customer-xu',
+    openedMinutesAgo: 165,
+    messages: [
+      { direction: 'inbound', text: '能改收货地址吗？' },
+      { direction: 'outbound', text: '未发货前可以改，我帮您登记一下新地址。' },
+      { direction: 'inbound', text: '已经改好了，谢谢' },
+    ],
+  },
+];
+
+/** The distinct seats the demo rows are spread over, in the order they appear. */
+const SEATS = [
+  ...new Map(
+    DEMO_CONVERSATIONS.map((conversation) => [
+      conversation.seatMemberId,
+      { memberId: conversation.seatMemberId, name: conversation.seatName },
+    ]),
+  ).values(),
 ];
 
 /** Tables this command requires, so a missing migration is named rather than guessed. */
@@ -261,19 +394,21 @@ async function assertDemoScope(client) {
     );
   }
 
-  const member = await client.query('SELECT tenant_id, store_id, role FROM members WHERE id = $1', [
-    SEAT_MEMBER_ID,
-  ]);
-  if (member.rowCount === 0) {
-    throw new Error(
-      `seat "${SEAT_MEMBER_ID}" is missing; run "npm run db:seed" first (directory fixtures)`,
-    );
-  }
-  const seat = member.rows[0];
-  if (seat.tenant_id !== TENANT_ID || seat.store_id !== STORE_ID || seat.role !== 'agent') {
-    throw new Error(
-      `member "${SEAT_MEMBER_ID}" is not a "${STORE_ID}" seat of "${TENANT_ID}"; refusing to assign demo conversations to it`,
-    );
+  for (const seat of SEATS) {
+    const member = await client.query('SELECT tenant_id, store_id, role FROM members WHERE id = $1', [
+      seat.memberId,
+    ]);
+    if (member.rowCount === 0) {
+      throw new Error(
+        `seat "${seat.memberId}" (${seat.name}) is missing; run "npm run db:seed" first (directory fixtures)`,
+      );
+    }
+    const row = member.rows[0];
+    if (row.tenant_id !== TENANT_ID || row.store_id !== STORE_ID || row.role !== 'agent') {
+      throw new Error(
+        `member "${seat.memberId}" is not a "${STORE_ID}" seat of "${TENANT_ID}"; refusing to assign demo conversations to it`,
+      );
+    }
   }
 
   const foreign = await client.query(
@@ -344,8 +479,9 @@ function quotaWindowOf(conversation, messageAt) {
 
 /**
  * @param {Client} client - Client inside the transaction.
- * @returns {Promise<{conversations: number, messages: number, windows: number, visible: number}>} Rows inserted,
- *   and how many conversations the demo seat can read once the insert is done.
+ * @returns {Promise<{conversations: number, messages: number, windows: number,
+ *   visible: ReadonlyArray<{memberId: string, name: string, total: number}>}>} Rows
+ *   inserted, and how many conversations each demo seat can read once the insert is done.
  */
 async function applyDemo(client) {
   await client.query('BEGIN');
@@ -382,7 +518,7 @@ async function applyDemo(client) {
           conversation.externalCustomerId,
           conversation.title,
           conversation.status,
-          SEAT_MEMBER_ID,
+          conversation.seatMemberId,
           openedAt,
           lastMessageAt,
           closedAt,
@@ -443,20 +579,26 @@ async function applyDemo(client) {
 
     // Read the rows back inside the same transaction: an insert that reported
     // success but left a seat with no readable queue would be the exact failure
-    // this command exists to fix, so it is checked rather than assumed.
-    const visible = await client.query(
-      `SELECT count(*)::int AS total FROM conversations c
-        WHERE c.tenant_id = $1 AND c.store_id = $2
-          AND (c.assigned_member_id IS NULL OR c.assigned_member_id = $3)`,
-      [TENANT_ID, STORE_ID, SEAT_MEMBER_ID],
-    );
+    // this command exists to fix, so it is checked rather than assumed. Counted
+    // per seat, because "the demo tenant has conversations" is not the property
+    // that matters — each seat having one of its own is.
+    const visible = [];
+    for (const seat of SEATS) {
+      const result = await client.query(
+        `SELECT count(*)::int AS total FROM conversations c
+          WHERE c.tenant_id = $1 AND c.store_id = $2
+            AND (c.assigned_member_id IS NULL OR c.assigned_member_id = $3)`,
+        [TENANT_ID, STORE_ID, seat.memberId],
+      );
+      visible.push({ ...seat, total: result.rows[0].total });
+    }
 
     await client.query('COMMIT');
     return {
       conversations: insertedConversations,
       messages: insertedMessages,
       windows: insertedWindows,
-      visible: visible.rows[0].total,
+      visible,
     };
   } catch (error) {
     await client.query('ROLLBACK').catch(() => undefined);
@@ -535,9 +677,11 @@ async function main() {
       `reply windows: ${result.windows} inserted, ` +
         `${DEMO_CONVERSATIONS.length - result.windows} already present`,
     );
-    log(`seat "${SEAT_MEMBER_ID}" (${SEAT_NAME}) can now read ${result.visible} conversation(s)`);
-    if (result.visible === 0) {
-      log('warning: the queue is still empty for this seat; check tenant, store and assignment');
+    for (const seat of result.visible) {
+      log(`seat "${seat.memberId}" (${seat.name}) can now read ${seat.total} conversation(s)`);
+      if (seat.total === 0) {
+        log(`warning: the queue is still empty for "${seat.memberId}"; check tenant, store and assignment`);
+      }
     }
     log('delete them again with "npm run seed:demo --workspace @kefu/database -- --undo"');
   } catch (error) {

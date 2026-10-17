@@ -42,6 +42,9 @@
     .profile-form label:first-child { margin-top:0; }
     .modal .profile-form-error { min-height:17px; margin:8px 0 0; color:#c73e41; font-size:11px; }
     .avatar { width:34px; height:34px; display:grid; place-items:center; border-radius:50%; background:#e9edff; color:#4967b2; font-weight:800; }
+    /* 真实头像铺满整枚圆形，方形图源按中心裁切，不把照片拉变形；没有头像时这枚元素
+       里只有姓名首字，走的是上面那条底色。 */
+    .avatar img { width:100%; height:100%; border-radius:50%; object-fit:cover; display:block; }
     .topbar { height:70px; background:#fff; border-bottom:1px solid var(--line); display:flex; align-items:center; justify-content:space-between; padding:0 25px; gap:18px; }
     .top-left,.top-right { display:flex; align-items:center; gap:14px; min-width:0; }
     .brandline { font-weight:800; font-size:17px; white-space:nowrap; letter-spacing:-.3px; }
@@ -75,7 +78,8 @@
     .live-dot { width:7px; height:7px; display:inline-block; border-radius:50%; background:var(--green); margin-right:5px; }
     .clock { color:var(--muted); font-size:12px; white-space:nowrap; }
     .role-label { color:var(--muted); font-size:12px; }
-    .role-select { border:0; background:transparent; color:#4a5b75; font-weight:650; }
+    /* 顶部只展示当前角色文字，隐藏原生下拉箭头：这个箭头在锁定状态下不可用，容易误导成可切换入口。 */
+    .role-select { border:0; background:transparent; color:#4a5b75; font-weight:650; appearance:none; -webkit-appearance:none; padding:0; }
     .workspace { display:grid; grid-template-columns:280px minmax(390px,1fr) 360px; grid-template-rows:auto minmax(0,1fr); height:calc(100vh - 70px); min-height:650px; }
     /* Compact agent controls and metrics sit above all three workbench columns. */
     .workspace-overview { grid-column:1/-1; display:flex; align-items:center; flex-wrap:wrap; gap:14px; min-height:76px; padding:10px 20px; border-bottom:1px solid var(--line); background:#fff; }
@@ -162,6 +166,9 @@
     .group-chat-entry-time { flex:none; color:#a2adbc; font-size:10px; }
     .group-chat-note { padding:9px 22px; background:#f2f6ff; border-bottom:1px solid #e0e9fb; color:#58709d; font-size:11px; }
     .group-composer-label { color:#6c7c94; font-size:11px; }
+    /* 内部会话工具栏右侧的「发给谁 + 状态」要成组出现，否则 justify-content:space-between
+       会把说明推到工具栏正中间。 */
+    .composer-toolbar .toolbar-note { display:flex; align-items:center; gap:8px; }
     .group-member { display:flex; align-items:center; gap:9px; padding:9px 0; border-bottom:1px solid #f1f3f7; }
     .group-member:last-child { border-bottom:0; }
     .group-member .avatar { width:30px; height:30px; flex:none; font-size:11px; }
@@ -187,6 +194,16 @@
     .pill.orange { color:#aa6c16; background:#fff4e4; }
     .pill.green { color:#168764; background:#e8f8f1; }
     .pill.gray { color:#78869b; background:#f0f3f7; }
+    /* 「我的会话」里客户会话和同事会话排同一个列表：靠这枚小标签分清这条消息来自客户还是客服。 */
+    .role-chip { flex:0 0 auto; margin-left:auto; border-radius:5px; padding:2px 6px; font-size:10px; font-weight:700; }
+    .role-chip.customer { color:#2d63db; background:#eaf1ff; }
+    .role-chip.agent { color:#168764; background:#e8f8f1; }
+    /* 平台侧（平台管理员）不是本公司的客服，单独一色，免得被当成客服看。 */
+    .role-chip.platform { color:#4a5a7a; background:#e9eef7; }
+    .preview .from { font-weight:700; }
+    .preview .from.customer { color:#5b7cc4; }
+    .preview .from.agent { color:#3f8f77; }
+    .conversation.internal .avatar { background:#e8f8f1; color:#168764; }
     .chat { display:flex; flex-direction:column; min-width:0; min-height:0; background:#f9fbfe; }
     .chat-header { height:83px; background:#fff; border-bottom:1px solid var(--line); padding:13px 24px; display:flex; align-items:center; justify-content:space-between; gap:12px; }
     .chat-title { font-size:16px; font-weight:780; }
@@ -207,6 +224,11 @@
     .message-content { max-width:100%; }
     .message-meta { color:#a3adbc; font-size:10px; margin:0 1px 5px; }
     .message.agent .message-meta { text-align:right; }
+    /* 同一条消息流里可能同时有客户和同事的话，标签跟着气泡一起区分。 */
+    .message-meta .msg-role { display:inline-flex; margin-right:5px; border-radius:5px; padding:1px 5px; font-size:10px; font-weight:700; }
+    .message-meta .msg-role.customer { color:#2d63db; background:#eaf1ff; }
+    .message-meta .msg-role.agent { color:#168764; background:#e8f8f1; }
+    .message-meta .msg-role.platform { color:#4a5a7a; background:#e9eef7; }
     .bubble { background:#fff; padding:10px 14px; border:1px solid var(--line); border-radius:11px 11px 11px 3px; box-shadow:0 2px 5px rgba(32,55,89,.025); font-size:13px; white-space:pre-wrap; }
     .message.agent .bubble { background:#eaf1ff; border-color:#d8e6ff; border-radius:11px 11px 3px 11px; }
     .system-line { color:#9ca9ba; text-align:center; font-size:10px; margin:13px 0 23px; }
@@ -424,8 +446,6 @@
     .admin-permission-option strong,.admin-permission-option small { display:block; }.admin-permission-option strong { font-size:12px; }.admin-permission-option small { margin-top:3px; color:#96a3b3; font-size:10px; }
     .admin-actions { display:flex; justify-content:flex-end; padding-top:17px; }
     .admin-muted { color:#97a4b4; font-size:11px; line-height:1.6; }
-    .admin-routing-note { display:flex; align-items:center; gap:15px; padding:12px 15px; background:#eef5ff; border:1px solid #dbe9ff; border-radius:9px; color:#5d769d; font-size:11px; margin-bottom:16px; }
-    .admin-routing-note strong { color:#315fae; white-space:nowrap; }
     .admin-record-filters { display:flex; gap:10px; margin-bottom:13px; }.admin-record-filters .search { max-width:300px; background:#fff; }
     .admin-record-detail h3 { display:flex; align-items:center; justify-content:space-between; gap:10px; }
     .admin-record-message { display:flex; gap:10px; padding:11px; border-top:1px solid #f0f3f7; font-size:12px; }
@@ -483,7 +503,7 @@
     .knowledge-import-issues { max-height:120px; overflow:auto; padding:9px 11px; border-radius:8px; background:#fff7ed; color:#9a641a; font-size:10px; line-height:1.55; }
     @media (max-width:1150px) { .admin-tool-grid { grid-template-columns:repeat(2,minmax(0,1fr)); } .admin-overview-stats { grid-template-columns:repeat(2,minmax(0,1fr)); } }
     @media (max-width:1120px) { .knowledge-layout { grid-template-columns:1fr; } .knowledge-maintain-panel { position:static; } }
-    @media (max-width:720px) { .admin-tool-grid,.admin-overview-stats,.admin-staff-summary,.admin-definition-grid,.admin-permission-options { grid-template-columns:1fr; } .admin-filter-bar,.admin-section-title,.admin-routing-note { flex-wrap:wrap; } .admin-filter-note { margin-left:0; text-align:left; } .admin-permission-option.full { grid-column:auto; } .admin-record-filters { flex-wrap:wrap; } }
+    @media (max-width:720px) { .admin-tool-grid,.admin-overview-stats,.admin-staff-summary,.admin-definition-grid,.admin-permission-options { grid-template-columns:1fr; } .admin-filter-bar,.admin-section-title { flex-wrap:wrap; } .admin-filter-note { margin-left:0; text-align:left; } .admin-permission-option.full { grid-column:auto; } .admin-record-filters { flex-wrap:wrap; } }
     @media (max-width:1280px) { .workspace { grid-template-columns:250px minmax(330px,1fr) 320px; } .topbar { padding:0 16px; } .clock { display:none; } .overview-metric { flex-basis:103px; } }
     @media (max-width:1080px) { .workspace { grid-template-columns:240px minmax(0,1fr); } .assist { display:none; } .stat-grid { grid-template-columns:repeat(2,minmax(0,1fr)); } .overview-details { padding-left:12px; flex-wrap:wrap; } .overview-details p { margin-left:0; } }
     @media (max-width:720px) { .app { grid-template-columns:54px 1fr; } .rail { padding:10px 2px; } .logo { width:36px; height:36px; margin-bottom:12px; } .nav-item { width:47px; font-size:9px; } .topbar { height:62px; } .top-right .role-label,.top-right .divider { display:none; } .brandline { font-size:14px; } .workspace { height:calc(100vh - 62px); grid-template-columns:1fr; } .workspace-overview { padding:10px 12px; gap:7px; } .agent-summary { min-width:0; } .overview-metrics { order:3; flex-basis:100%; } .overview-metric { min-width:102px; } .overview-details { order:4; } .overview-toggle { margin-left:auto; } .queue { display:none; } .chat-header { padding:10px; } .messages { padding:18px 12px; } .page { height:calc(100vh - 62px); padding:20px 15px; } .two-col { grid-template-columns:1fr; } .top-left .selector { max-width:130px; } .knowledge-page-header { flex-direction:column; } .knowledge-page-actions { justify-content:flex-start; } .knowledge-panel-head { align-items:flex-start; flex-direction:column; gap:9px; } .knowledge-tabs { width:100%; } .knowledge-tabs button { flex:1; } .knowledge-filter-row,.knowledge-test-body { align-items:stretch; flex-direction:column; } .knowledge-filter-row .selector { width:100%; } .knowledge-count { margin-left:0; } }
@@ -494,6 +514,8 @@
 .export-form label { display: grid; gap: 8px; font-size: 13px; }
 .export-filter-fields { display: grid; grid-template-columns: 2fr 1fr 1fr; gap: 16px; }
 .export-filter-fields[hidden] { display: none; }
+/* 范围说明随选择变化：两种口径的文件差别就在「有没有对话」，所以给它一块自己的底色。 */
+.export-scope-hint { margin: 0; padding: 10px 12px; border-radius: 8px; background: #f2f6fd; color: #4a5b7a; font-size: 12px; line-height: 1.6; }
 .export-table { overflow-x: auto; }
 .export-table .table { min-width: 800px; }
 .export-job-id { display: block; color: var(--muted); margin-top: 6px; }
@@ -527,3 +549,75 @@
 #catalog-editor .knowledge-form-fields > .btn { margin-top:10px; }
 #catalog-editor .table th, #catalog-editor .table td { padding:10px 6px; }
 @media (max-width:480px) { .catalog-attribute-row { flex-wrap:wrap; } .catalog-attribute-row [data-key] { flex-basis:100%; } }
+
+/* 设置页：企业微信渠道连接表单与客服账号列表。字段标签在上、输入在下，
+   窄屏收成单列，避免中文标签把输入框挤窄。 */
+.settings-form { padding:16px 20px 20px; border-top:1px solid var(--line); }
+.settings-form-note { margin:0 0 14px; color:#55657c; font-size:11px; line-height:1.6; }
+.settings-form-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:12px 16px; }
+.settings-field label { display:block; margin-bottom:5px; color:#55657c; font-size:10px; font-weight:750; }
+.settings-form .field:disabled { color:#5f6f83; background:#f5f7fa; cursor:not-allowed; }
+.settings-form .field[readonly] { color:#5f6f83; background:#f5f7fa; }
+.settings-form-help { margin:10px 0 0; color:#93a0b1; font-size:10px; line-height:1.55; }
+.settings-form-error { min-height:16px; margin:6px 0 0; color:#c2413b; font-size:10px; }
+/* 自检通过时的结果行。绿色沿用 .pill.green 的深色，10px 字号下浅色 --green 对比度不够。 */
+.settings-form-ok { min-height:16px; margin:6px 0 0; color:#168764; font-size:10px; }
+.settings-form-actions { display:flex; justify-content:flex-end; gap:8px; margin-top:10px; }
+.table-scroll { overflow-x:auto; }
+.table-scroll .table { min-width:760px; }
+.settings-member-actions { display:flex; gap:12px; align-items:center; }
+.settings-member-actions .small-link[disabled] { color:#a9b3c1; cursor:not-allowed; }
+.settings-member-self { color:#93a0b1; font-size:10px; }
+@media (max-width:768px) { .settings-form-grid { grid-template-columns:1fr; } }
+/* 弹窗比页面窄，建账号表单在弹窗里强制单列，避免两列被挤成半截。 */
+#modal-extra .settings-form-grid { grid-template-columns:1fr; }
+#modal-extra .settings-form-error { margin-top:8px; }
+
+/* 员工分流（管理员中心）：权重输入要窄，别在表格里撑成一整行。 */
+.admin-routing-weight{width:88px;text-align:right}
+.admin-routing-fixed{color:var(--text-secondary,#666)}
+.admin-routing-self{color:#93a0b1;font-size:10px}
+.admin-routing-error{min-height:16px;margin:6px 0 0;color:#c2413b;font-size:10px}
+
+/* 商品库页：把「导进来了」与「检索找得到」分成两组数字，列表沿用知识库表格的排版。 */
+.products-index-counts { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:12px; padding:16px 20px 4px; }
+.products-index-counts div { padding:12px; border:1px solid #e5eaf1; border-radius:8px; background:#f8faff; min-width:0; }
+.products-index-counts strong { display:block; color:#263b59; font-size:20px; }
+.products-index-counts span { display:block; margin-top:3px; color:#93a0b1; font-size:10px; }
+.products-table-wrap { overflow-x:auto; }
+.products-table-wrap .table { min-width:760px; }
+.panel-title-note { color:#93a0b1; font-size:10px; line-height:1.5; text-align:right; }
+/* 失败切片一行一块：谁失败了、还能不能重试、原因，三段都在，长错误串要能换行。 */
+.products-index-failures { display:grid; gap:6px; padding:0 20px 18px; }
+.products-index-failures:empty { display:none; }
+.products-index-failure { display:grid; grid-template-columns:minmax(0,1.1fr) minmax(0,.7fr) minmax(0,2fr); gap:10px; padding:8px 10px; border:1px solid #f0ded2; border-radius:8px; background:#fffaf6; color:#8a5a35; font-size:10px; line-height:1.55; overflow-wrap:anywhere; }
+@media (max-width:1080px) { .products-index-counts { grid-template-columns:repeat(2,minmax(0,1fr)); } }
+@media (max-width:720px) { .products-index-counts { grid-template-columns:1fr; padding:14px 14px 2px; } .products-index-failure { grid-template-columns:1fr; } .panel-title-note { display:none; } }
+
+
+/* 导入对话框：先选表头来源。两种文件的行数结果一样，差别只在列名对不对得上，
+   所以「这份文件的表头是什么」要摆在选文件之前，而不是等预览整批拒绝再回头改。 */
+.knowledge-import-layouts { display:grid; gap:8px; margin:6px 0 2px; }
+.knowledge-import-layout { display:flex; gap:9px; align-items:flex-start; padding:10px 12px; border:1px solid #e0e8f2; border-radius:8px; background:#fff; color:#55657c; font-size:11px; line-height:1.6; cursor:pointer; }
+.knowledge-import-layout:hover { border-color:#cbd8ea; }
+.knowledge-import-layout:has(input:checked) { border-color:#a9bfff; background:#f7f9ff; }
+.knowledge-import-layout input { flex:0 0 auto; margin-top:2px; }
+.knowledge-import-layout b { color:#243650; font-weight:750; }
+.knowledge-import-layout code { padding:1px 4px; border-radius:4px; background:#eef3fb; color:#3d5b86; font-size:10px; }
+.knowledge-import-file { display:block; margin-top:14px; color:#55657c; font-size:11px; font-weight:750; }
+.knowledge-import-file + .field { width:100%; margin-top:6px; }
+.knowledge-import-optional { margin:14px 0 0; padding:10px 12px; border:1px dashed #d3ddea; border-radius:8px; }
+.knowledge-import-optional[hidden] { display:none; }
+.knowledge-import-optional legend { padding:0 4px; color:#8390a2; font-size:10px; }
+.knowledge-import-optional label { display:flex; gap:8px; align-items:flex-start; color:#55657c; font-size:11px; line-height:1.6; }
+.knowledge-import-optional label + label { margin-top:6px; }
+/* 导入批次失败、索引失败这类「要人去看一眼」的状态，用红色区分于 .pill.orange 的「还在跑」。 */
+.pill.red { color:#c2413b; background:#fdedeb; }
+
+/* 「商品」页签的搜索结果里并进来的结构化商品库命中：与上面的手工条目分成两块，
+   标题一句说清这批行来自哪里、为什么这一页不能编辑它们。 */
+.knowledge-catalog-matches { margin-top: 16px; }
+.knowledge-catalog-matches:empty { display: none; }
+.knowledge-match-note { margin: 0 0 9px; padding: 9px 12px; border: 1px solid #dce7f7; border-radius: 9px; background: #f5f9ff; color: #536985; font-size: 11px; line-height: 1.6; }
+.knowledge-match-note b { color: #31465f; font-weight: 750; }
+.knowledge-catalog-matches .footnote { margin-top: 8px; }

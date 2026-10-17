@@ -1,4 +1,8 @@
-<!-- 商家管理员：商品库 -->
+<!-- 商家管理员：商品库（结构化目录的总览、导入入口与索引状态）
+
+     这一页读的是真实结构化目录：统计、列表、索引状态与导入批次都来自后端，
+     逐条维护不在这里，在「知识库 → SPU / SKU」。两个数字来源不同（目录表 vs
+     索引表），所以「导进来了」和「检索找得到」在这一页是分开的两格。 -->
 <section id="products" class="page">
   <div class="page-header">
     <div>
@@ -6,62 +10,153 @@
         商品库
       </h1>
       <div class="page-desc">
-        管理商品款式、规格与资料快照。导入后系统异步建立检索索引。
+        结构化商品目录（SPU / 款式 与 SKU / 规格）。导入后由后台异步建立检索索引。
       </div>
     </div>
     <div class="page-actions">
-      <button class="btn" id="download-template">
+      <button class="btn" id="download-template" type="button">
         下载导入模板
       </button>
-      <button class="btn primary" id="import-products">
+      <button class="btn primary" id="import-products" type="button">
         导入 Excel / CSV
       </button>
     </div>
+  </div>
+  <div id="products-scope-note" class="knowledge-scope-note" role="status">
+    正在读取商品目录…
   </div>
   <div class="stat-grid">
     <div class="stat">
       <div class="stat-label">
         商品款式 SPU
       </div>
-      <div class="stat-value">
-        286
+      <div class="stat-value" id="products-stat-spu">
+        —
       </div>
-      <div class="stat-note">
-        首批试点上限 300
+      <div class="stat-note" id="products-stat-spu-note">
+        读 /knowledge/spus
       </div>
     </div>
     <div class="stat">
       <div class="stat-label">
-        规格 SKU
+        商品类目
       </div>
-      <div class="stat-value">
-        742
+      <div class="stat-value" id="products-stat-category">
+        —
       </div>
       <div class="stat-note">
-        含颜色、容量等变体
+        启用中的类目
       </div>
     </div>
     <div class="stat">
       <div class="stat-label">
         索引已就绪
       </div>
-      <div class="stat-value">
-        281
+      <div class="stat-value" id="products-stat-indexed">
+        —
       </div>
-      <div class="stat-note">
-        5 个商品正在处理
+      <div class="stat-note" id="products-stat-indexed-note">
+        切片的索引状态
       </div>
     </div>
     <div class="stat">
       <div class="stat-label">
-        待修复数据
+        待索引 / 失败
       </div>
-      <div class="stat-value">
-        3
+      <div class="stat-value" id="products-stat-attention">
+        —
       </div>
-      <div class="stat-note">
-        可下载错误明细
+      <div class="stat-note" id="products-stat-attention-note">
+        待处理与已放弃的切片
       </div>
+    </div>
+  </div>
+  <div class="panel">
+    <div class="panel-head">
+      <span class="panel-title">
+        索引状态
+      </span>
+      <span class="pill blue" id="products-index-pill">
+        读取中
+      </span>
+    </div>
+    <div class="products-index-counts">
+      <div>
+        <strong id="products-index-indexed">
+          —
+        </strong>
+        <span>
+          已就绪
+        </span>
+      </div>
+      <div>
+        <strong id="products-index-pending">
+          —
+        </strong>
+        <span>
+          等待索引
+        </span>
+      </div>
+      <div>
+        <strong id="products-index-failed">
+          —
+        </strong>
+        <span>
+          失败 / 跳过
+        </span>
+      </div>
+      <div>
+        <strong id="products-index-embeddings">
+          —
+        </strong>
+        <span>
+          已写向量
+        </span>
+      </div>
+    </div>
+    <p class="knowledge-form-help" id="products-index-note">
+      正在读取索引状态…
+    </p>
+    <div class="products-index-failures" id="products-index-failures"></div>
+  </div>
+  <div class="panel">
+    <div class="panel-head">
+      <span class="panel-title">
+        最近导入
+      </span>
+      <span class="panel-title-note">
+        每次导入写一条批次账，行数结果取自服务端回执
+      </span>
+    </div>
+    <div class="products-table-wrap">
+      <table class="table">
+        <thead>
+          <tr>
+            <th>
+              时间
+            </th>
+            <th>
+              状态
+            </th>
+            <th>
+              数据行
+            </th>
+            <th>
+              成功 / 失败
+            </th>
+            <th>
+              门店
+            </th>
+          </tr>
+        </thead>
+        <tbody id="products-batches">
+          <tr>
+            <td colspan="5">
+              正在读取导入记录…
+            </td>
+          </tr>
+        </tbody>
+      </table>
     </div>
   </div>
   <div class="panel">
@@ -74,170 +169,57 @@
       </span>
     </div>
     <div class="filter-row">
-      <input class="search" placeholder="搜索商品名称、SPU、型号">
-      <select class="selector">
-        <option>
-          全部类目
+      <input class="search" id="products-search" placeholder="搜索商品名称或 SPU 编码" aria-label="搜索商品">
+      <select class="selector" id="products-status-filter" aria-label="筛选上架状态">
+        <option value="all">
+          全部状态
         </option>
-        <option>
-          家居用品
+        <option value="on_shelf">
+          已上架
         </option>
-        <option>
-          数码配件
+        <option value="off_shelf">
+          已下架
         </option>
-      </select>
-      <select class="selector">
-        <option>
-          全部索引状态
-        </option>
-        <option>
-          已就绪
-        </option>
-        <option>
-          处理中
-        </option>
-        <option>
-          异常
+        <option value="unknown">
+          未知
         </option>
       </select>
     </div>
-    <table class="table">
-      <thead>
-        <tr>
-          <th>
-            商品 / SPU
-          </th>
-          <th>
-            类目
-          </th>
-          <th>
-            SKU
-          </th>
-          <th>
-            资料更新
-          </th>
-          <th>
-            索引状态
-          </th>
-          <th>
-            操作
-          </th>
-        </tr>
-      </thead>
-      <tbody>
-        <tr>
-          <td>
-            <strong>
-              轻享保温杯 500ml
-            </strong>
-            <br>
-            SPU-202609-0081
-          </td>
-          <td>
-            水杯
-          </td>
-          <td>
-            2
-          </td>
-          <td>
-            09月22日 08:30
-          </td>
-          <td>
-            <span class="pill green">
-              已就绪
-            </span>
-          </td>
-          <td>
-            <button class="small-link" data-demo="查看商品资料">
-              查看资料
-            </button>
-          </td>
-        </tr>
-        <tr>
-          <td>
-            <strong>
-              轻享保温杯 350ml
-            </strong>
-            <br>
-            SPU-202609-0082
-          </td>
-          <td>
-            水杯
-          </td>
-          <td>
-            3
-          </td>
-          <td>
-            09月22日 08:30
-          </td>
-          <td>
-            <span class="pill green">
-              已就绪
-            </span>
-          </td>
-          <td>
-            <button class="small-link" data-demo="查看商品资料">
-              查看资料
-            </button>
-          </td>
-        </tr>
-        <tr>
-          <td>
-            <strong>
-              简约收纳架 三层
-            </strong>
-            <br>
-            SPU-202609-0146
-          </td>
-          <td>
-            家居
-          </td>
-          <td>
-            4
-          </td>
-          <td>
-            09月21日 17:10
-          </td>
-          <td>
-            <span class="pill orange">
-              处理中
-            </span>
-          </td>
-          <td>
-            <button class="small-link" data-demo="查看商品资料">
-              查看资料
-            </button>
-          </td>
-        </tr>
-        <tr>
-          <td>
-            <strong>
-              旅行充电器 65W
-            </strong>
-            <br>
-            SPU-202609-0252
-          </td>
-          <td>
-            数码
-          </td>
-          <td>
-            2
-          </td>
-          <td>
-            09月20日 11:28
-          </td>
-          <td>
-            <span class="pill orange">
-              字段待修复
-            </span>
-          </td>
-          <td>
-            <button class="small-link" data-demo="查看错误明细">
-              查看错误
-            </button>
-          </td>
-        </tr>
-      </tbody>
-    </table>
+    <div class="products-table-wrap">
+      <table class="table">
+        <thead>
+          <tr>
+            <th>
+              商品 / SPU
+            </th>
+            <th>
+              类目
+            </th>
+            <th>
+              门店
+            </th>
+            <th>
+              上架状态
+            </th>
+            <th>
+              资料更新
+            </th>
+            <th>
+              操作
+            </th>
+          </tr>
+        </thead>
+        <tbody id="products-list">
+          <tr>
+            <td colspan="6">
+              正在读取商品目录…
+            </td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="footnote" id="products-list-note">
+      —
+    </p>
   </div>
 </section>

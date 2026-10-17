@@ -16,9 +16,11 @@ import { HealthModule } from './health/health.module';
 import { AllExceptionsFilter } from './http/all-exceptions.filter';
 import { ResponseEnvelopeInterceptor } from './http/response-envelope.interceptor';
 import { IdentityModule } from './identity/identity.module';
+import { InternalChatModule } from './internal-chat/internal-chat.module';
 import { KnowledgeModule } from './knowledge/knowledge.module';
 import { LoggingModule } from './logging/logging.module';
 import { MediaModule } from './media/media.module';
+import { PersonalPhrasesModule } from './personal-phrases/personal-phrases.module';
 import { PlatformModule } from './platform/platform.module';
 import { RealtimeModule } from './realtime/realtime.module';
 import { ReportsModule } from './reports/reports.module';
@@ -54,10 +56,12 @@ export class AppModule {
         AccountModule,
         AdminModule,
         IdentityModule,
+        InternalChatModule,
         ConversationsModule,
         AssignmentModule,
         ExportsModule,
         KnowledgeModule,
+        PersonalPhrasesModule,
         RetrievalModule,
         ReviewModule,
         ReportsModule,

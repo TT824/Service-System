@@ -37,6 +37,7 @@ import type {
   Conversation,
   ConversationAssignment,
   ConversationIntent,
+  ConversationRoutingWeight,
   DispatchOutcome,
   FaqItem,
   FaqItemPatch,
@@ -45,6 +46,9 @@ import type {
   ImportBatchWithErrors,
   IngestResult,
   InboundMessageInput,
+  InternalAttachmentRecord,
+  InternalMessage,
+  InternalThread,
   KnowledgeIndexStatusFilter,
   KnowledgeIndexStatusSummary,
   Member,
@@ -57,6 +61,8 @@ import type {
   NewProductSku,
   NewProductSpu,
   OutboundMessageInput,
+  PersonalPhrase,
+  PersonalPhrasePatch,
   Product,
   ProductCategory,
   ProductImportBatch,
@@ -151,6 +157,23 @@ export type CreateShortcutRecord = {
   readonly now?: string;
 };
 
+/**
+ * Data used to create a personal quick phrase.
+ *
+ * `memberId` is required and is never taken from a request body: it is the id of
+ * the member the session proved, passed down from the controller. An adapter
+ * accepting an owner the caller chose would be the whole isolation hole.
+ */
+export type CreatePersonalPhraseRecord = {
+  readonly tenantId: string;
+  readonly memberId: string;
+  readonly category: string;
+  readonly title: string;
+  readonly keywords: ReadonlyArray<string>;
+  readonly text: string;
+  readonly now?: string;
+};
+
 /** Data used to persist a generated suggestion set. */
 export type CreateSuggestionSetRecord = {
   readonly tenantId: string;
@@ -195,6 +218,25 @@ export type AppendAuditRecord = {
   readonly targetId?: string | null;
   readonly metadata?: Readonly<Record<string, unknown>>;
   readonly createdAt?: string;
+};
+
+/** One seat's 分流权重, as an administrator submitted it. */
+export type RoutingWeightEntry = {
+  readonly memberId: string;
+  readonly weight: number;
+};
+
+/** Data used to store 分流权重 for the seats a save names. */
+export type SaveRoutingWeightsRecord = {
+  readonly tenantId: string;
+  /**
+   * The seats this save speaks for. Seats left out keep the weight they had —
+   * the write is an upsert, never a replace (see {@link PlatformRepository.saveRoutingWeights}).
+   */
+  readonly weights: ReadonlyArray<RoutingWeightEntry>;
+  /** The administrator who made the choice; stored on every row it touches. */
+  readonly updatedBy: string;
+  readonly now: string;
 };
 
 /** Data used to record an agent seat's availability. */
@@ -253,6 +295,13 @@ export interface PlatformRepository {
   getMember(memberId: string): Promise<Member | undefined>;
   /** Enabled members of one tenant, ordered by id. */
   listMembers(tenantId: string): Promise<ReadonlyArray<Member>>;
+  /**
+   * Enabled platform administrators, ordered by id.
+   *
+   * They carry `tenantId === null`, so no tenant listing contains them; a
+   * surface that has to reach the platform side asks for them by name.
+   */
+  listPlatformAdministrators(): Promise<ReadonlyArray<Member>>;
 
   // --------------------------------------------------------------------------
   // Knowledge (products, FAQs, shortcuts)
@@ -305,6 +354,37 @@ export interface PlatformRepository {
     patch: ShortcutPatch,
     now?: string,
   ): Promise<Shortcut | undefined>;
+
+  /**
+   * Personal quick phrases belonging to one member, newest first.
+   *
+   * Both ids are required. A personal phrase is private to its owner, so there
+   * is no tenant-wide read of them, and the store-scoped reads a shortcut has do
+   * not exist here at all.
+   */
+  listPersonalPhrases(tenantId: string, memberId: string): Promise<ReadonlyArray<PersonalPhrase>>;
+  /** One personal phrase, only when it belongs to the asking member. */
+  getPersonalPhrase(
+    tenantId: string,
+    memberId: string,
+    phraseId: string,
+  ): Promise<PersonalPhrase | undefined>;
+  /** Create a personal phrase for one member; the adapter assigns the id. */
+  createPersonalPhrase(input: CreatePersonalPhraseRecord): Promise<PersonalPhrase>;
+  /**
+   * Patch one of a member's own phrases.
+   *
+   * Answers `undefined` both when the id is unknown and when it belongs to
+   * somebody else: the caller turns either into the same `not_found`, so the
+   * response cannot be used to test whether another agent's phrase exists.
+   */
+  updatePersonalPhrase(
+    tenantId: string,
+    memberId: string,
+    phraseId: string,
+    patch: PersonalPhrasePatch,
+    now?: string,
+  ): Promise<PersonalPhrase | undefined>;
 
   // --------------------------------------------------------------------------
   // Index status
@@ -623,6 +703,33 @@ export interface PlatformRepository {
   ): Promise<string | undefined>;
 
   /**
+   * Every seat of a tenant an administrator has given a 分流权重 to.
+   *
+   * A seat nobody has set is **absent** rather than reported as
+   * `DEFAULT_ASSIGNMENT_WEIGHT`: the reader applies the default, so this answers
+   * "what has been configured" while `listAssignmentCandidates` answers "what is
+   * in force". That split is what keeps an unconfigured tenant reading back an
+   * empty list instead of a full table of ones.
+   */
+  listRoutingWeights(tenantId: string): Promise<ReadonlyArray<ConversationRoutingWeight>>;
+
+  /**
+   * Store 分流权重 for the seats a save names, in one write.
+   *
+   * **Upsert-only**: a seat absent from `weights` keeps the weight it had, so a
+   * settings form that drew only part of the roster cannot silently reset the
+   * rest. `weight: DEFAULT_ASSIGNMENT_WEIGHT` is how a seat returns to the
+   * default, and it is stored rather than deleted so the change keeps its author
+   * and its instant.
+   *
+   * Whether a named seat may carry a weight is the caller's judgement: it needs
+   * the roster, which the caller has already read.
+   */
+  saveRoutingWeights(
+    input: SaveRoutingWeightsRecord,
+  ): Promise<ReadonlyArray<ConversationRoutingWeight>>;
+
+  /**
    * Assign every due pooled conversation this sweep can, in one transaction.
    *
    * The dispatcher proper. Selection is `planAutoAssign` from `@kefu/core`;
@@ -682,7 +789,96 @@ export interface PlatformRepository {
   listAudit(tenantId: string): Promise<ReadonlyArray<AuditEntry>>;
   /** Retention evaluation for one tenant at `now`. */
   summarizeRetention(tenantId: string, now: string): Promise<RetentionSummary>;
+
+  // --------------------------------------------------------------------------
+  // Internal collaboration (colleague to colleague)
+  // --------------------------------------------------------------------------
+
+  /**
+   * The threads a member takes part in, most recently active first.
+   *
+   * Scoped by membership, not by store: internal chat is tenant-wide, so two
+   * colleagues in different stores of the same tenant can still talk.
+   */
+  listInternalThreads(tenantId: string, memberId: string): Promise<ReadonlyArray<InternalThread>>;
+  /** One thread inside the tenant scope. */
+  getInternalThread(tenantId: string, threadId: string): Promise<InternalThread | undefined>;
+  /**
+   * The one-to-one thread between two members, created on first use.
+   *
+   * Idempotent by construction: the adapter derives the id from the ascending
+   * participant pair, so two seats opening the same chat converge on one row
+   * instead of each creating its own half of the conversation.
+   */
+  ensureDirectInternalThread(input: EnsureDirectInternalThreadRecord): Promise<InternalThread>;
+  /** Every message of a thread, oldest first. */
+  listInternalMessages(tenantId: string, threadId: string): Promise<ReadonlyArray<InternalMessage>>;
+  /**
+   * Append one message and advance the thread's activity stamp.
+   *
+   * The message and its attachment are written together, in one transaction,
+   * and the attachment is *claimed* — the draft's `message_id` is set from
+   * `NULL` in the same statement that writes the message. Two facts, one commit:
+   * a message that shows a file the sender had already removed, or a draft
+   * claimed by a message that was never written, are both impossible.
+   */
+  appendInternalMessage(input: AppendInternalMessageRecord): Promise<InternalMessage | undefined>;
+  /**
+   * Store one uploaded attachment as a draft, before any message names it.
+   *
+   * The bytes are already in object storage when this runs: the upload is what
+   * created them, and the row is the record of what was written. If this write
+   * fails, the object is an orphan the bucket's own namespace can enumerate —
+   * never the reverse, which would be a row promising bytes nobody has.
+   */
+  createInternalAttachment(
+    input: CreateInternalAttachmentRecord,
+  ): Promise<InternalAttachmentRecord>;
+  /**
+   * The attachment of one message, tenant-scoped.
+   *
+   * The serve path's only lookup: the signed URL carries a tenant and a message
+   * id, and a message of another tenant simply does not resolve.
+   */
+  getInternalMessageAttachment(
+    tenantId: string,
+    messageId: string,
+  ): Promise<InternalAttachmentRecord | undefined>;
 }
+
+/** Input to {@link PlatformRepository.ensureDirectInternalThread}. */
+export type EnsureDirectInternalThreadRecord = {
+  readonly tenantId: string;
+  readonly memberIdA: string;
+  readonly memberIdB: string;
+  readonly now: string;
+};
+
+/** Input to {@link PlatformRepository.appendInternalMessage}. */
+export type AppendInternalMessageRecord = {
+  readonly tenantId: string;
+  readonly threadId: string;
+  readonly senderMemberId: string;
+  readonly body: string;
+  /** The draft to claim and attach, or `null` for a text-only message. */
+  readonly attachmentId: string | null;
+  readonly createdAt: string;
+};
+
+/** Input to {@link PlatformRepository.createInternalAttachment}. */
+export type CreateInternalAttachmentRecord = {
+  /** Minted by the caller, because the object key is derived from it. */
+  readonly id: string;
+  readonly tenantId: string;
+  readonly threadId: string;
+  readonly uploaderMemberId: string;
+  readonly kind: InternalAttachmentRecord['kind'];
+  readonly fileName: string;
+  readonly mimeType: string;
+  readonly byteSize: number;
+  readonly objectKey: string;
+  readonly createdAt: string;
+};
 
 /**
  * Decide which platform repository an environment uses.

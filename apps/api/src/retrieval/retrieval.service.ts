@@ -27,7 +27,9 @@ import {
   type FusedRecallHit,
   type GeneratedCandidate,
   type GenerationProvider,
+  type GenerationTurn,
   type Member,
+  type Message,
   type ProductSku,
   type ProductSpu,
   type RecalledChunk,
@@ -86,6 +88,93 @@ function isScriptHit(
   entry: RetrievableKnowledge,
 ): entry is RetrievableKnowledge & { readonly recall: NonNullable<RetrievableKnowledge['recall']> } {
   return entry.recall !== undefined && entry.kind !== 'product';
+}
+
+/**
+ * How many earlier messages one generation request carries as memory.
+ *
+ * Ten, as a window rather than a budget. An order question resolves in a few
+ * exchanges — 「这个多少钱」「有 XL 吗」「那黑色呢」 — and past ten messages the
+ * conversation has usually moved on to something else; carried further, the older
+ * half stops being context and becomes material the model can quote back at a
+ * customer who has finished with it. The same number bounds what the prompt costs
+ * per call, which is the second reason it is written down in one place.
+ */
+const GENERATION_HISTORY_TURNS = 10;
+
+/**
+ * The newest thing the customer said, and where in the conversation it sits.
+ *
+ * The index travels out beside the text because the history needs a boundary:
+ * the window ends where the question begins, and a question that appeared twice
+ * would invite the model to read it as something already handled.
+ *
+ * @param messages - The conversation, oldest first.
+ * @returns The text — empty when the conversation holds no question — and its index.
+ */
+function latestInboundMessage(messages: ReadonlyArray<Message>): {
+  readonly text: string;
+  readonly index: number;
+} {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index];
+    if (message === undefined || message.direction !== 'inbound') {
+      continue;
+    }
+    if (message.content.trim().length === 0) {
+      continue;
+    }
+    if (isChannelMessagePlaceholder(message.content)) {
+      // The newest thing the customer said has no words in it: an image, a
+      // voice note or a file, whose content is the platform's own placeholder.
+      // Nothing is suggested for it — a model asked to answer `[语音消息]` is
+      // being asked to guess, and a candidate drawn from the *previous*
+      // message would be sent as though the voice note had been heard. The
+      // placeholder in the transcript is the hand-over to a person, and this
+      // empty answer is what makes the workspace stop asking for candidates.
+      return { text: '', index };
+    }
+    return { text: message.content, index };
+  }
+  return { text: '', index: messages.length };
+}
+
+/**
+ * The last few messages before the question, oldest first, as model-visible turns.
+ *
+ * Two filters, and they are not the same one. A message with no text at all is
+ * dropped: it has nothing to say to anybody. A **placeholder is kept**, which is
+ * the opposite of what the question does with one — the guard in
+ * {@link latestInboundMessage} exists so that nobody answers a voice note nobody
+ * heard, while in a transcript 「顾客：[图片]」 is a fact about what happened and the
+ * reason the next question says 「这个」. Dropping it would delete the antecedent
+ * and leave the pronoun.
+ *
+ * @param messages - The conversation, oldest first.
+ * @param beforeIndex - Where the question sits; nothing at or after it is history.
+ * @returns At most {@link GENERATION_HISTORY_TURNS} turns, oldest first.
+ */
+function recentHistory(
+  messages: ReadonlyArray<Message>,
+  beforeIndex: number,
+): ReadonlyArray<GenerationTurn> {
+  const newestFirst: GenerationTurn[] = [];
+  for (let index = Math.min(beforeIndex, messages.length) - 1; index >= 0; index -= 1) {
+    if (newestFirst.length === GENERATION_HISTORY_TURNS) {
+      break;
+    }
+    const message = messages[index];
+    if (message === undefined || message.content.trim().length === 0) {
+      continue;
+    }
+    newestFirst.push(
+      Object.freeze({
+        role: message.direction === 'inbound' ? ('customer' as const) : ('agent' as const),
+        content: message.content,
+      }),
+    );
+  }
+  return Object.freeze(newestFirst.reverse());
 }
 
 /**
@@ -173,10 +262,18 @@ export class RetrievalService {
       member,
       input.conversationId,
     );
-    const query =
-      input.query === undefined
-        ? await this.latestInboundText(tenantId, conversation.id)
-        : input.query;
+    // One read of the conversation answers two questions: what is being asked,
+    // and what was said before it. Going back to the table for the second would
+    // ask it for the same rows twice.
+    const messages = await this.repository.listMessages(tenantId, conversation.id);
+    const latest = latestInboundMessage(messages);
+    const query = input.query === undefined ? latest.text : input.query;
+    // An explicit `query` did not come out of the transcript, so the whole of it
+    // is history; otherwise the window stops where the question begins.
+    const history = recentHistory(
+      messages,
+      input.query === undefined ? latest.index : messages.length,
+    );
     const intent = classifyIntent(query);
 
     // A greeting is not searched for. The two recall legs, the fusion, the
@@ -260,7 +357,7 @@ export class RetrievalService {
     // have been answered by the block above, so what is left is the products —
     // which is what "generate from the product's own information" means. No
     // second filter is needed to say so, and a second filter is what would drift.
-    const drafts = await this.draft(tenantId, query, knowledge.entries, input.limit);
+    const drafts = await this.draft(tenantId, query, knowledge.entries, input.limit, history);
     if (drafts !== undefined) {
       return this.persistSet({
         tenantId,
@@ -366,12 +463,17 @@ export class RetrievalService {
    * guarantees every candidate names an entry it was given, so with nothing
    * given there is nothing that could come back — asking would spend a model
    * call to be told what is already known.
+   *
+   * The history is not a second question and is not checked like one. It is
+   * context for the question — which is why an empty one is not a reason to skip
+   * the call, and why the question's own guard above is about the question only.
    */
   private async draft(
     tenantId: string,
     query: string,
     entries: ReadonlyArray<RetrievableKnowledge>,
     limit: number | undefined,
+    history: ReadonlyArray<GenerationTurn>,
   ): Promise<ReadonlyArray<SuggestionCandidate> | undefined> {
     const provider = this.generation;
     if (provider === undefined || entries.length === 0) {
@@ -391,6 +493,7 @@ export class RetrievalService {
 
     const result = await provider.generate({
       query,
+      history,
       knowledge: entries.map((entry) => ({
         id: entry.id,
         title: entry.title,
@@ -403,7 +506,13 @@ export class RetrievalService {
       this.logger.logStructured(
         'warn',
         'the generation provider did not deliver',
-        { tenantId, model: provider.model, code: result.code, reason: result.reason },
+        {
+          tenantId,
+          model: provider.model,
+          code: result.code,
+          reason: result.reason,
+          historyTurns: history.length,
+        },
         'RetrievalService',
       );
       return undefined;
@@ -414,7 +523,12 @@ export class RetrievalService {
       this.logger.logStructured(
         'warn',
         'the generation provider answered with no anchored candidate',
-        { tenantId, model: provider.model, answered: result.candidates.length },
+        {
+          tenantId,
+          model: provider.model,
+          answered: result.candidates.length,
+          historyTurns: history.length,
+        },
         'RetrievalService',
       );
       return undefined;
@@ -494,31 +608,6 @@ export class RetrievalService {
       throw new ForbiddenException('conversation is not assigned to this member');
     }
     return conversation;
-  }
-
-  private async latestInboundText(tenantId: string, conversationId: string): Promise<string> {
-    const messages = await this.repository.listMessages(tenantId, conversationId);
-    for (let index = messages.length - 1; index >= 0; index -= 1) {
-      const message = messages[index];
-      if (message === undefined || message.direction !== 'inbound') {
-        continue;
-      }
-      if (message.content.trim().length === 0) {
-        continue;
-      }
-      if (isChannelMessagePlaceholder(message.content)) {
-        // The newest thing the customer said has no words in it: an image, a
-        // voice note or a file, whose content is the platform's own placeholder.
-        // Nothing is suggested for it — a model asked to answer `[语音消息]` is
-        // being asked to guess, and a candidate drawn from the *previous*
-        // message would be sent as though the voice note had been heard. The
-        // placeholder in the transcript is the hand-over to a person, and this
-        // empty answer is what makes the workspace stop asking for candidates.
-        return '';
-      }
-      return message.content;
-    }
-    return '';
   }
 
   /**

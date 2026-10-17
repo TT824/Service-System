@@ -58,6 +58,7 @@ import {
 import type {
   AppendAttemptInput,
   ChannelReliabilityRepository,
+  ClaimOutboxForSendInput,
   CreateDeliveryInput,
   DeliveryRecord,
   EnqueueOutboxInput,
@@ -67,6 +68,7 @@ import type {
   RecordDegradationInput,
   RecordInboundEventInput,
   RecordStatusEventInput,
+  ReleaseOutboxClaimInput,
   SaveOutboxStateInput,
   StatusEventRecord,
 } from './channel-reliability.repository';
@@ -559,11 +561,64 @@ export class PostgresChannelReliabilityRepository implements ChannelReliabilityR
     return existing;
   }
 
+  /**
+   * @inheritdoc
+   *
+   * The same conditions the Worker's due-work claim applies, so exactly one of
+   * the two can win an entry: `status = 'pending'` and no live lease. An expired
+   * lease passes, which is the recovery path for a holder that died mid-send.
+   * `attempt_count` is deliberately not touched — the attempt is counted where
+   * it has always been counted, when the adapter was actually reached, so a
+   * refusal before the provider does not spend one.
+   */
+  async claimOutboxForSend(
+    input: ClaimOutboxForSendInput,
+  ): Promise<ChannelOutboxRecord | undefined> {
+    const rows = await this.rows(
+      // The entry id and the two timestamps each get their own placeholder.
+      // They cannot share one: PostgreSQL resolves a parameter to a single type
+      // for the whole statement, so a `$2` that is both `id` (text) and a
+      // timestamp comparison makes the comparison fail outright rather than
+      // coerce — `operator does not exist: timestamp with time zone <= text`
+      // — and `id = $2` would have compared the row's id against a clock
+      // reading even if it had been typed.
+      `UPDATE channel_outbox
+          SET lease_owner = $3, lease_expires_at = $4, updated_at = $5
+        WHERE tenant_id = $1 AND id = $2
+          AND status = 'pending'
+          AND (lease_expires_at IS NULL OR lease_expires_at <= $5)
+        RETURNING *`,
+      [
+        input.tenantId,
+        input.outboxId,
+        input.owner,
+        new Date(Date.parse(input.now) + input.leaseMs).toISOString(),
+        input.now,
+      ],
+    );
+    return optional(rows[0], toOutbox);
+  }
+
+  /** @inheritdoc */
+  async releaseOutboxClaim(input: ReleaseOutboxClaimInput): Promise<void> {
+    await this.rows(
+      `UPDATE channel_outbox
+          SET lease_owner = NULL, lease_expires_at = NULL, updated_at = $3
+        WHERE tenant_id = $1 AND id = $2`,
+      [input.tenantId, input.outboxId, input.now],
+    );
+  }
+
   /** @inheritdoc */
   async saveOutboxState(input: SaveOutboxStateInput): Promise<ChannelOutboxRecord> {
     const rows = await this.rows(
+      // The lease is given back in the same statement: every caller of this is
+      // finishing the send it held the entry for, and a released entry is what
+      // lets the Worker retry a pending one — or leave a dispatched one alone —
+      // without waiting out a lease nobody holds any more.
       `UPDATE channel_outbox
-          SET status = $3, attempt_count = $4, updated_at = $5
+          SET status = $3, attempt_count = $4, updated_at = $5,
+              lease_owner = NULL, lease_expires_at = NULL
         WHERE tenant_id = $1 AND id = $2
         RETURNING *`,
       [input.tenantId, input.outboxId, input.status, input.attemptCount, input.now],

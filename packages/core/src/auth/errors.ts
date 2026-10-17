@@ -138,6 +138,12 @@ export class AuthError extends Error {
 
   /** Platform-level stable error code for this failure. */
   get apiCode(): ApiErrorCode {
+    // 锁定单独成一个码，不跟着状态码降级：密码可能是对的，只是这段时间内一律
+    // 拒绝收下。合成 `unauthorized` 会把「等一会儿再试」说成「凭据不对」，而这
+    // 正是操作者以为密码或账号坏了的原因。
+    if (this.code === 'account_locked') {
+      return 'account_locked';
+    }
     switch (this.status) {
       case 400:
         return 'bad_request';

@@ -112,11 +112,15 @@ describe('MessageMediaService.capture', () => {
       IMAGE_BYTES,
     );
     // The row and the object agree, which is what makes the transcript's image
-    // reachable at all.
+    // reachable at all. The two absences are asserted rather than skipped: an
+    // inbound picture has no file name of its own and no provider handle worth
+    // keeping, and `null` is how every reader is told so.
     expect((await platform.getMessage(TENANT, message.id))?.media).toEqual({
       key: `tenants/${TENANT}/messages/${message.id}`,
       mimeType: 'image/png',
       bytes: IMAGE_BYTES.byteLength,
+      name: null,
+      providerMediaId: null,
     });
   });
 

@@ -326,7 +326,8 @@ describe('renderCustomerList', () => {
     const lines = text.split('\n');
     expect(lines[0]).toBe('导出内容：全部顾客');
     expect(lines[1]).toBe(`导出时间：${GENERATED_AT}`);
-    expect(lines[2]).toBe('消息时间均为 UTC。');
+    // 名单里没有消息：抬头不能说「消息时间」。
+    expect(lines[2]).toBe('时间均为 UTC。');
     expect(lines[4]).toBe('[2026-09-22T01:00:00.000Z] 网页顾客-2LIX · 企业微信 · 会话 2 · 微信 wm-1');
   });
 

@@ -10,6 +10,13 @@
  */
 
 import { createAuditEntry, AUDIT_ACTIONS } from './audit';
+import {
+  directInternalThreadId,
+  sortedPair,
+  type InternalAttachmentRecord,
+  type InternalMessage,
+  type InternalThread,
+} from './internal-chat';
 import { countsAsFirstReply } from './types';
 import {
   claimConversation,
@@ -31,8 +38,10 @@ import {
   type AgentPresence,
   type AssignmentAction,
   type AssignmentCandidate,
+  DEFAULT_ASSIGNMENT_WEIGHT,
   type AssignmentReasonCode,
   type ConversationAssignment,
+  type ConversationRoutingWeight,
   type DispatchOutcome,
 } from './assignment';
 import type {
@@ -69,6 +78,10 @@ import type {
   FaqItemPatch,
   Member,
   Message,
+  MessageMediaInput,
+  MessageType,
+  PersonalPhrase,
+  PersonalPhrasePatch,
   Product,
   ProductPatch,
   ReviewPolicy,
@@ -80,7 +93,7 @@ import type {
   Tenant,
   Store,
 } from './types';
-import { DEFAULT_RETENTION_DAYS, isReviewEligibleSource } from './types';
+import { DEFAULT_RETENTION_DAYS, isReviewEligibleSource, outboundMessageMedia } from './types';
 import type { MessageSource } from './types';
 
 /** Result of a conversation mutation performed through the store. */
@@ -113,13 +126,33 @@ export type ApprovalResult =
       readonly reason: string;
     };
 
-/** Data used to send an outbound message. */
+/**
+ * Data used to send an outbound message.
+ *
+ * `messageType` and `media` are one fact split in two and are read together by
+ * {@link outboundMessageMedia}, which refuses a media message with nothing
+ * behind it and a text message with something.
+ */
 export type OutboundMessageInput = {
   readonly tenantId: string;
   readonly storeId: string;
   readonly conversationId: string;
   readonly content: string;
   readonly source: MessageSource;
+  /**
+   * What kind of message this is. Defaults to `text`.
+   *
+   * Beyond that the vocabulary is the channel's: `image`, `video` and `file` are
+   * the three kinds of media it can carry, and each of them requires
+   * {@link OutboundMessageInput.media}. Every one of them is a fact the caller
+   * has already established: the bytes are in object storage under the key the
+   * media names, and the provider has been given them and answered with its own
+   * handle. This input carries those outcomes into the row; it does none of the
+   * work.
+   */
+  readonly messageType?: MessageType;
+  /** The media behind a media message. Absent for text, and required otherwise. */
+  readonly media?: MessageMediaInput | null;
   readonly candidateId?: string | null;
   readonly dedupKey?: string | null;
   readonly now?: string;
@@ -181,6 +214,7 @@ export class KefuStore {
   private products: Product[] = [];
   private faqs: FaqItem[] = [];
   private shortcuts: Shortcut[] = [];
+  private personalPhrases: PersonalPhrase[] = [];
   private categories: ProductCategory[] = [];
   private categoryAttributes: CategoryAttribute[] = [];
   private spus: ProductSpu[] = [];
@@ -192,9 +226,13 @@ export class KefuStore {
   private messages: Message[] = [];
   private presence: AgentPresence[] = [];
   private assignments: ConversationAssignment[] = [];
+  private routingWeights: ConversationRoutingWeight[] = [];
   private approvedPhrases: ApprovedPhrase[] = [];
   private auditEntries: AuditEntry[] = [];
   private suggestionSets: SuggestionSet[] = [];
+  private internalThreads: InternalThread[] = [];
+  private internalMessages: InternalMessage[] = [];
+  private internalAttachments: InternalAttachmentRecord[] = [];
   private reviewPolicy: ReviewPolicy = defaultReviewPolicy();
   private sequence = 1000;
 
@@ -228,6 +266,24 @@ export class KefuStore {
 
   listMembers(tenantId: string): ReadonlyArray<Member> {
     return this.members.filter((member) => member.tenantId === tenantId && member.enabled);
+  }
+
+  /**
+   * Enabled platform administrators, who belong to no tenant.
+   *
+   * Kept as its own reader rather than a `tenantId: null` argument to
+   * {@link listMembers}, because the two answer different questions: that one
+   * asks "who sits in this company" and this one asks "who is the platform side".
+   * A caller that confuses them would list the platform side as a colleague of
+   * every company, which is only correct on the one surface that actually talks
+   * to them (see the internal-chat peer directory).
+   *
+   * @returns The platform administrators, ordered by id.
+   */
+  listPlatformAdministrators(): ReadonlyArray<Member> {
+    return this.members.filter(
+      (member) => member.tenantId === null && member.role === 'platform_admin' && member.enabled,
+    );
   }
 
   /**
@@ -542,6 +598,118 @@ export class KefuStore {
       createdAt: current.createdAt,
     };
     this.shortcuts[index] = updated;
+    return updated;
+  }
+
+  /**
+   * One agent's own phrases, newest first.
+   *
+   * `memberId` is required rather than optional: there is no "every personal
+   * phrase of the tenant" read, and an optional owner would be an invitation to
+   * ask for one. Newest first, with the id as a tie-break so that two phrases
+   * written in the same millisecond still come back in one fixed order rather
+   * than in whatever order the sort happened to see them.
+   */
+  listPersonalPhrases(tenantId: string, memberId: string): ReadonlyArray<PersonalPhrase> {
+    return this.personalPhrases
+      .filter((item) => item.tenantId === tenantId && item.memberId === memberId)
+      .sort((a, b) => {
+        if (a.createdAt !== b.createdAt) {
+          return a.createdAt < b.createdAt ? 1 : -1;
+        }
+        return a.id < b.id ? 1 : -1;
+      });
+  }
+
+  getPersonalPhrase(
+    tenantId: string,
+    memberId: string,
+    phraseId: string,
+  ): PersonalPhrase | undefined {
+    return this.personalPhrases.find(
+      (item) => item.tenantId === tenantId && item.memberId === memberId && item.id === phraseId,
+    );
+  }
+
+  /**
+   * Create a personal phrase owned by one member.
+   *
+   * The owner is a required argument supplied by the caller from the
+   * authenticated member, so no request can create a phrase in someone else's
+   * list.
+   *
+   * @param input - Tenant, owner, phrase fields and an optional timestamp.
+   * @returns The new phrase.
+   */
+  createPersonalPhrase(input: {
+    readonly tenantId: string;
+    readonly memberId: string;
+    readonly category: string;
+    readonly title: string;
+    readonly keywords?: ReadonlyArray<string>;
+    readonly text: string;
+    readonly now?: string;
+  }): PersonalPhrase {
+    const now = input.now ?? new Date().toISOString();
+    const phrase: PersonalPhrase = {
+      id: this.nextId('personal-phrase'),
+      tenantId: input.tenantId,
+      memberId: input.memberId,
+      category: input.category,
+      title: input.title,
+      keywords: [...(input.keywords ?? [])],
+      text: input.text,
+      enabled: true,
+      updatedAt: now,
+      createdAt: now,
+    };
+    this.personalPhrases.push(phrase);
+    return phrase;
+  }
+
+  /**
+   * Apply a patch to one of the caller's own phrases.
+   *
+   * The lookup carries the member id, so another agent's phrase is simply not
+   * found — deliberately the same answer as a phrase that never existed. A
+   * distinguishable "not yours" would confirm that the id names something.
+   * Every field resolves as `patch ?? current`, which is what the durable
+   * adapter writes as `COALESCE($n, column)`; an empty `keywords` array is a
+   * value, not an absent field, so it clears the words rather than keeping them.
+   *
+   * @param input - Tenant, owner, phrase id and the fields to change.
+   * @returns The updated phrase, or `undefined` when this member has no such id.
+   */
+  updatePersonalPhrase(input: {
+    readonly tenantId: string;
+    readonly memberId: string;
+    readonly phraseId: string;
+    readonly patch: PersonalPhrasePatch;
+    readonly now?: string;
+  }): PersonalPhrase | undefined {
+    const index = this.personalPhrases.findIndex(
+      (item) =>
+        item.tenantId === input.tenantId &&
+        item.memberId === input.memberId &&
+        item.id === input.phraseId,
+    );
+    const current = this.personalPhrases[index];
+    if (current === undefined) {
+      return undefined;
+    }
+    const updated: PersonalPhrase = {
+      id: current.id,
+      tenantId: current.tenantId,
+      memberId: current.memberId,
+      category: input.patch.category ?? current.category,
+      title: input.patch.title ?? current.title,
+      keywords: input.patch.keywords === undefined ? current.keywords : [...input.patch.keywords],
+      text: input.patch.text ?? current.text,
+      enabled: input.patch.enabled ?? current.enabled,
+      updatedAt: input.now ?? new Date().toISOString(),
+      createdAt: current.createdAt,
+    };
+    this.personalPhrases[index] = updated;
     return updated;
   }
 
@@ -1408,6 +1576,7 @@ export class KefuStore {
     }
 
     const reviewEligible = isReviewEligibleSource(input.source);
+    const messageType = input.messageType ?? 'text';
     const message: Message = {
       id: this.nextId('message'),
       tenantId: current.conversation.tenantId,
@@ -1416,15 +1585,17 @@ export class KefuStore {
       channel: 'internal',
       direction: 'outbound',
       source: input.source,
-      messageType: 'text',
+      messageType,
       content: input.content,
       dedupKey: input.dedupKey ?? null,
       reviewEligible,
       reviewState: reviewEligible ? 'pending' : 'none',
       candidateId: input.candidateId ?? null,
-      // Nothing the platform sends through the composer carries stored media
-      // yet: an outbound image would be uploaded to the provider, not kept.
-      media: null,
+      // A picture, clip or document the seat sent carries a reference here, and
+      // the reference is complete the moment this row exists: the bytes are
+      // already in object storage and the provider already has its own copy. A
+      // text message carries none, which is the ordinary case.
+      media: outboundMessageMedia({ messageType, media: input.media ?? null }),
       createdAt: now,
     };
     this.messages.push(message);
@@ -1551,7 +1722,19 @@ export class KefuStore {
     }
     this.messages[index] = {
       ...existing,
-      media: { key: input.key, mimeType: input.mimeType, bytes: input.bytes },
+      // This is the *inbound* half — bytes the platform fetched from the
+      // provider's temporary copy, after the message itself had already been
+      // ingested. Nothing named them and the provider's handle for them is a
+      // copy that expires in days, so both are recorded as absent. The outbound
+      // half does not come through here: a seat's file is complete before its
+      // row is written, so it is recorded at insert.
+      media: {
+        key: input.key,
+        mimeType: input.mimeType,
+        bytes: input.bytes,
+        name: null,
+        providerMediaId: null,
+      },
     };
     return true;
   }
@@ -1675,6 +1858,13 @@ export class KefuStore {
           enabled: member.enabled,
           status: presence?.status ?? 'offline',
           heartbeatAt: presence?.heartbeatAt ?? null,
+          // The seat's 分流权重, or the default when nobody has set one. Applying
+          // the default here rather than seeding a row keeps the table to
+          // deliberate choices only.
+          weight:
+            this.routingWeights.find(
+              (row) => row.tenantId === tenantId && row.memberId === member.id,
+            )?.weight ?? DEFAULT_ASSIGNMENT_WEIGHT,
           inProgressCount: this.conversations.filter(
             (conversation) =>
               conversation.tenantId === tenantId &&
@@ -1716,6 +1906,54 @@ export class KefuStore {
       )
       .sort((a, b) => (a.createdAt < b.createdAt ? 1 : a.createdAt > b.createdAt ? -1 : 0));
     return handovers[0]?.createdAt;
+  }
+
+  /**
+   * The stored 分流权重 of one tenant, one row per seat an administrator set.
+   *
+   * A seat nobody has set is **absent**, not reported as the default: the reader
+   * applies {@link DEFAULT_ASSIGNMENT_WEIGHT}, so this answers "what has been
+   * configured" and the dispatcher's candidate read answers "what is in force".
+   */
+  listRoutingWeights(tenantId: string): ReadonlyArray<ConversationRoutingWeight> {
+    return this.routingWeights.filter((row) => row.tenantId === tenantId);
+  }
+
+  /**
+   * Store an administrator's 分流权重 for the seats it names.
+   *
+   * Upsert-only, deliberately: a settings form that drew only part of the roster
+   * must not silently reset the seats it did not draw. `weight: 1` is how a seat
+   * returns to the default, and it is *stored* rather than deleted so the change
+   * keeps its author and its instant.
+   *
+   * This does not judge whether a seat may carry a weight — that needs the
+   * roster, which only the caller has.
+   */
+  saveRoutingWeights(input: {
+    readonly tenantId: string;
+    readonly weights: ReadonlyArray<{ readonly memberId: string; readonly weight: number }>;
+    readonly updatedBy: string;
+    readonly now: string;
+  }): ReadonlyArray<ConversationRoutingWeight> {
+    for (const entry of input.weights) {
+      const index = this.routingWeights.findIndex(
+        (row) => row.tenantId === input.tenantId && row.memberId === entry.memberId,
+      );
+      const row: ConversationRoutingWeight = {
+        tenantId: input.tenantId,
+        memberId: entry.memberId,
+        weight: entry.weight,
+        updatedAt: input.now,
+        updatedBy: input.updatedBy,
+      };
+      if (index === -1) {
+        this.routingWeights.push(row);
+      } else {
+        this.routingWeights[index] = row;
+      }
+    }
+    return this.listRoutingWeights(input.tenantId);
   }
 
   /**
@@ -2050,6 +2288,245 @@ export class KefuStore {
       createdAt: now,
     });
     return set;
+  }
+
+  // --------------------------------------------------------------------------
+  // Internal collaboration (colleague to colleague)
+  // --------------------------------------------------------------------------
+
+  /**
+   * The threads a member takes part in, most recently active first.
+   *
+   * Filtered by *membership* rather than by store: internal chat is a
+   * tenant-wide surface, so colleagues in different stores of the same tenant
+   * can still talk to each other.
+   *
+   * @param tenantId - Effective tenant scope.
+   * @param memberId - The reading member.
+   * @returns The member's threads.
+   */
+  listInternalThreads(tenantId: string, memberId: string): ReadonlyArray<InternalThread> {
+    return this.internalThreads
+      .filter(
+        (thread) =>
+          thread.tenantId === tenantId && thread.participantMemberIds.includes(memberId),
+      )
+      .sort((a, b) => (a.lastMessageAt < b.lastMessageAt ? 1 : -1));
+  }
+
+  /**
+   * One thread inside the tenant scope.
+   *
+   * @param tenantId - Effective tenant scope.
+   * @param threadId - Thread to read.
+   * @returns The thread, or `undefined` when it is not in this tenant.
+   */
+  getInternalThread(tenantId: string, threadId: string): InternalThread | undefined {
+    return this.internalThreads.find(
+      (thread) => thread.tenantId === tenantId && thread.id === threadId,
+    );
+  }
+
+  /**
+   * The one-to-one thread between two members, created on first use.
+   *
+   * Idempotent: the id is derived from the participant pair, so calling this
+   * from either side returns the same thread and a second call never creates a
+   * second row.
+   *
+   * @param input - Tenant, the two members, and the instant to stamp.
+   * @returns The existing or newly created thread.
+   */
+  ensureDirectInternalThread(input: {
+    readonly tenantId: string;
+    readonly memberIdA: string;
+    readonly memberIdB: string;
+    readonly now?: string;
+  }): InternalThread {
+    const id = directInternalThreadId(input.tenantId, input.memberIdA, input.memberIdB);
+    const existing = this.getInternalThread(input.tenantId, id);
+    if (existing !== undefined) {
+      return existing;
+    }
+    const now = input.now ?? new Date().toISOString();
+    const thread: InternalThread = {
+      id,
+      tenantId: input.tenantId,
+      kind: 'direct',
+      participantMemberIds: sortedPair(input.memberIdA, input.memberIdB),
+      createdAt: now,
+      lastMessageAt: now,
+    };
+    this.internalThreads.push(thread);
+    return thread;
+  }
+
+  /**
+   * Every message of a thread, oldest first.
+   *
+   * @param tenantId - Effective tenant scope.
+   * @param threadId - Thread to read.
+   * @returns The thread's messages in the order they were written.
+   */
+  listInternalMessages(tenantId: string, threadId: string): ReadonlyArray<InternalMessage> {
+    return this.internalMessages
+      .filter((message) => message.tenantId === tenantId && message.threadId === threadId)
+      .sort((a, b) => (a.createdAt < b.createdAt ? -1 : 1))
+      .map((message) => this.#withAttachment(message));
+  }
+
+  /**
+   * Store one uploaded attachment as a draft.
+   *
+   * The id arrives from the caller rather than being minted here, because the
+   * object key is derived from it and the bytes are already written under that
+   * key by the time this is called. A repository that assigned its own id would
+   * be writing a row that names an object it never saw.
+   *
+   * @param input - The id, the thread it was uploaded into, who uploaded it and
+   *   what the file is.
+   * @returns The stored draft, with no message yet.
+   */
+  createInternalAttachment(input: {
+    readonly id: string;
+    readonly tenantId: string;
+    readonly threadId: string;
+    readonly uploaderMemberId: string;
+    readonly kind: InternalAttachmentRecord['kind'];
+    readonly fileName: string;
+    readonly mimeType: string;
+    readonly byteSize: number;
+    readonly objectKey: string;
+    readonly now?: string;
+  }): InternalAttachmentRecord {
+    const record: InternalAttachmentRecord = {
+      id: input.id,
+      tenantId: input.tenantId,
+      threadId: input.threadId,
+      uploaderMemberId: input.uploaderMemberId,
+      kind: input.kind,
+      fileName: input.fileName,
+      mimeType: input.mimeType,
+      byteSize: input.byteSize,
+      objectKey: input.objectKey,
+      messageId: null,
+      createdAt: input.now ?? new Date().toISOString(),
+    };
+    this.internalAttachments.push(record);
+    return record;
+  }
+
+  /**
+   * The attachment of one message, as the transcript's view of it.
+   *
+   * Tenant-scoped: a message id from another tenant resolves to nothing, which
+   * is what makes the serve path's signature check sufficient on its own.
+   *
+   * @param tenantId - Effective tenant scope.
+   * @param messageId - The message to look up.
+   * @returns The attachment, or `undefined` when the message has none.
+   */
+  getInternalMessageAttachment(
+    tenantId: string,
+    messageId: string,
+  ): InternalAttachmentRecord | undefined {
+    return this.internalAttachments.find(
+      (record) => record.tenantId === tenantId && record.messageId === messageId,
+    );
+  }
+
+  /**
+   * Append one message and advance the thread's activity stamp.
+   *
+   * @param input - Tenant, thread, sender, body, the draft to attach, and the
+   *   instant to stamp.
+   * @returns The appended message, or `undefined` when the named draft could not
+   *   be claimed — it does not exist, is not in this thread, was uploaded by
+   *   somebody else, or has already been sent.
+   */
+  appendInternalMessage(input: {
+    readonly tenantId: string;
+    readonly threadId: string;
+    readonly senderMemberId: string;
+    readonly body: string;
+    readonly attachmentId?: string | null;
+    readonly now?: string;
+  }): InternalMessage | undefined {
+    const attachmentId = input.attachmentId ?? null;
+    // The claim, and the same four conditions the SQL states: the draft is in
+    // this tenant, in this thread, uploaded by this sender, and not yet sent.
+    // Checked before the message is written, so a refused claim leaves no
+    // half-written message behind.
+    const draftIndex =
+      attachmentId === null
+        ? -1
+        : this.internalAttachments.findIndex(
+            (record) =>
+              record.tenantId === input.tenantId &&
+              record.id === attachmentId &&
+              record.threadId === input.threadId &&
+              record.uploaderMemberId === input.senderMemberId &&
+              record.messageId === null,
+          );
+    if (attachmentId !== null && draftIndex === -1) {
+      return undefined;
+    }
+
+    const now = input.now ?? new Date().toISOString();
+    const message: InternalMessage = {
+      id: this.nextId('internal-message'),
+      tenantId: input.tenantId,
+      threadId: input.threadId,
+      senderMemberId: input.senderMemberId,
+      body: input.body,
+      attachment: null,
+      createdAt: now,
+    };
+    this.internalMessages.push(message);
+
+    const draft = this.internalAttachments[draftIndex];
+    if (draft !== undefined) {
+      this.internalAttachments[draftIndex] = { ...draft, messageId: message.id };
+    }
+
+    const index = this.internalThreads.findIndex(
+      (thread) => thread.tenantId === input.tenantId && thread.id === input.threadId,
+    );
+    const thread = this.internalThreads[index];
+    if (thread !== undefined) {
+      // Replaced rather than mutated: the record type is readonly, which is what
+      // stops a caller holding an earlier read from seeing this write.
+      this.internalThreads[index] = { ...thread, lastMessageAt: now };
+    }
+    return this.#withAttachment(message);
+  }
+
+  /**
+   * The message with its attachment folded in.
+   *
+   * Messages are stored without one and joined on read, exactly as the SQL
+   * adapter does it, so a message and its file cannot disagree about which
+   * message the file belongs to: the attachment row is the only place that
+   * link is written.
+   *
+   * @param message - A stored message.
+   * @returns The message, with its attachment or `null`.
+   */
+  #withAttachment(message: InternalMessage): InternalMessage {
+    const record = this.getInternalMessageAttachment(message.tenantId, message.id);
+    if (record === undefined) {
+      return { ...message, attachment: null };
+    }
+    return {
+      ...message,
+      attachment: {
+        id: record.id,
+        kind: record.kind,
+        fileName: record.fileName,
+        mimeType: record.mimeType,
+        byteSize: record.byteSize,
+      },
+    };
   }
 
   // --------------------------------------------------------------------------

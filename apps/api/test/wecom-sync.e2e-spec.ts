@@ -233,6 +233,9 @@ describe('WeCom kf/sync_msg notification pull (interface)', () => {
 
   /** POST one signed callback to the documented callback URL. */
   function post(callback: { body: string; signature: string }): request.Test {
+    // Callers assert `200`: WeCom reads only `200` as "received" and retries
+    // anything else, so both callback routes answer it instead of the `201` Nest
+    // would give a POST.
     return request(app.getHttpServer())
       .post(`/api/v1/channels/wecom/webhook?timestamp=${TIMESTAMP}&nonce=${NONCE}`)
       .query({ msg_signature: callback.signature })
@@ -287,7 +290,7 @@ describe('WeCom kf/sync_msg notification pull (interface)', () => {
       has_more: 0,
     });
 
-    const response = await post(notification()).expect(201);
+    const response = await post(notification()).expect(200);
 
     expect(dataOf(response.body)).toEqual({
       status: 'synced',
@@ -330,7 +333,7 @@ describe('WeCom kf/sync_msg notification pull (interface)', () => {
       next_cursor: 'cursor-window',
       has_more: 0,
     });
-    await post(notification()).expect(201);
+    await post(notification()).expect(200);
 
     const conversations = await conversationsFor(TENANT, 'wm-customer-sync');
     const conversationId = conversations[0]?.id ?? '';
@@ -358,7 +361,7 @@ describe('WeCom kf/sync_msg notification pull (interface)', () => {
       next_cursor: 'cursor-window-2',
       has_more: 0,
     });
-    const response = await post(notification()).expect(201);
+    const response = await post(notification()).expect(200);
 
     // The provider handed the same message back, which is what a retried or
     // replayed push looks like. It is ingested again — idempotently.
@@ -380,7 +383,7 @@ describe('WeCom kf/sync_msg notification pull (interface)', () => {
     }
     const before = http.syncBodies.length;
 
-    const response = await post(notification()).expect(201);
+    const response = await post(notification()).expect(200);
 
     // Eight pages were offered; the bound is what ends the pull.
     expect(http.syncBodies.length - before).toBe(5);
@@ -428,7 +431,7 @@ describe('WeCom kf/sync_msg notification pull (interface)', () => {
       has_more: 0,
     });
 
-    const pulled = await post(notification()).expect(201);
+    const pulled = await post(notification()).expect(200);
     const failed = await post(notification(UNBOUND_KF_ID)).expect(503);
 
     for (const body of [pulled.body, failed.body]) {
@@ -441,7 +444,7 @@ describe('WeCom kf/sync_msg notification pull (interface)', () => {
 
   it('still ingests a direct message callback that carries the message itself', async () => {
     const claimsBefore = bindings.claims.length;
-    const response = await post(directCallback('910900')).expect(201);
+    const response = await post(directCallback('910900')).expect(200);
 
     // The direct path is unchanged by the pull being wired: same route, same
     // ingestion result, same tenant resolved from the account binding.
@@ -462,7 +465,7 @@ describe('WeCom kf/sync_msg notification pull (interface)', () => {
     // binding store alone — so the tenant below can only come from
     // `findActiveBinding`, the same read a `kf_msg_or_event` pull makes. Nothing
     // in this boot binds a scope by any other means.
-    const response = await post(directCallback('910901')).expect(201);
+    const response = await post(directCallback('910901')).expect(200);
     expect(dataOf(response.body)).toMatchObject({ status: 'processed', eventId: '910901' });
     expect(await conversationsFor(TENANT, 'wm-customer-direct')).toHaveLength(1);
 

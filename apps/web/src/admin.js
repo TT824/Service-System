@@ -22,7 +22,6 @@
   };
   let period='day', currentView='overview', permissionStaffId=staff[0].id;
   let permissionDraft=new Set(staff[0].permissions);
-  const routingDraft=new Map(staff.map(item=>[item.id,item.routing]));
   const audit=[];
   const permissionRequests=new Set();
 
@@ -78,12 +77,14 @@
     byId('admin-overview-stats').hidden=false;
     const values=staff.map(item=>item.metrics[period]);
     const total=key=>values.reduce((sum,item)=>sum+item[key],0);
-    const receiving=staff.filter(item=>item.routing&&item.presence==='在线').length;
+    // 「可参与接待」不再是演示值：它读的就是「员工分流」那张表当前的事实。没读到
+    // 之前显示「—」，不拿演示人数顶上——同一页上两处给出不同的人数最误导人。
+    const routing=window.RoutingPortal?.summary?.()||null;
     byId('admin-overview-stats').innerHTML=[...(canAccess('compare')?[
       card('接待员工',`${staff.length} 人`,'当前租户可见成员'),
       card(`${periodNames[period]}接单量`,`${total('accepted')} 单`,'系统分配并进入接待'),
       card(`${periodNames[period]}付款金额`,money(total('revenue')),'订单系统接入后核算')]:[]),
-      ...(canAccess('routing')?[card('可参与接待',`${receiving} 人`,'已启用分流且当前在线')]:[])
+      ...(canAccess('routing')?[card('可参与接待',routing?`${routing.online} 人`:'—','分流表里已启用且当前在线')]:[])
     ].join('');
   }
   function renderStaff(){
@@ -149,21 +150,33 @@
     if(canAccess('permissions'))switchView('permissions');
     notify('员工权限已保存（仅本地演示）');
   }
+  /**
+   * 「员工分流」现在是真数据：席位表、权重和保存都在 app.js 的 RoutingPortal 里
+   * （会话、租户范围和 API 客户端都在那边）。这一页只保留管理员中心自己的两件事：
+   * 权限模块决定能不能看，以及把改动写进操作日志。
+   */
   function renderRouting(){
     if(!canAccess('routing'))return;
-    byId('admin-routing-rows').innerHTML=staff.map(item=>`<tr><td><strong>${escape(item.name)}</strong></td><td>${escape(item.stores)}</td><td>${escape(item.presence)}</td><td><label><input type="checkbox" data-routing-id="${escape(item.id)}" ${routingDraft.get(item.id)?'checked':''}> 参与自动接待</label></td></tr>`).join('');
-    byId('admin-routing-rows').querySelectorAll('[data-routing-id]').forEach(input=>input.onchange=()=>routingDraft.set(input.dataset.routingId,input.checked));
+    window.RoutingPortal?.open();
   }
-  function saveRouting(){
+  async function saveRouting(){
     if(!requireAccess('routing'))return;
-    const changes=staff.filter(item=>item.routing!==routingDraft.get(item.id));
-    if(!changes.length){notify('分流资格没有变化');return}
-    changes.forEach(item=>{
-      item.routing=routingDraft.get(item.id);
-      addAudit('修改分流资格',`${item.name} · ${item.routing?'参与':'暂停'}自动接待`);
-    });
-    renderOverview();
-    notify('分流资格已保存（仅本地演示）');
+    const portal=window.RoutingPortal;
+    if(!portal)return;
+    try{
+      const changed=await portal.save();
+      // null 是「什么都没发生」：要么输入没通过校验，要么还没读到这一家公司的席位。
+      // 这时不能提示「没有变化」——那会把一条错误说成一次空操作。
+      if(changed===null)return;
+      if(!changed.length){notify('分流比例没有变化');return}
+      // 一次保存可能改了好几个人的比例，日志就按人各记一条：查「谁改的」时看得见是哪一位。
+      changed.forEach(item=>addAudit('修改分流比例',`${item.name} · ${item.from} → ${item.weight}`));
+      renderOverview();
+      notify('分流比例已保存，下一次派单按新比例执行');
+    }catch(error){
+      // 失败原因面板自己已经写在表下了，这里不再弹一次，也不写操作日志：
+      // 没成功的事不该出现在日志里。
+    }
   }
   function renderRecords(){
     if(!canAccess('records'))return;
@@ -194,7 +207,7 @@
   function renderAll(){renderOverview();renderStaff();renderCompare();renderAudit()}
   function refreshAccess(){
     // 角色切换时清空未授权内容，避免残留上一个角色的员工数据或聊天记录。
-    const content={staff:['admin-staff-summary'],compare:['admin-chart','admin-compare-rows'],permissions:['admin-permission-name','admin-permission-role','admin-permission-options'],routing:['admin-routing-rows'],records:['admin-record-rows','admin-record-detail'],audit:['admin-audit-rows']};
+    const content={staff:['admin-staff-summary'],compare:['admin-chart','admin-compare-rows'],permissions:['admin-permission-name','admin-permission-role','admin-permission-options'],routing:['admin-routing-body'],records:['admin-record-rows','admin-record-detail'],audit:['admin-audit-rows']};
     Object.entries(content).forEach(([module,ids])=>{if(!canAccess(module))ids.forEach(id=>byId(id).innerHTML='')});
     const options=staff.map(item=>`<option value="${escape(item.id)}">${escape(item.name)} · ${escape(item.role)}</option>`).join('');
     byId('admin-staff-select').innerHTML=canAccess('staff')?options:'';
@@ -206,6 +219,10 @@
       button.classList.toggle('requires-permission',!allowed);
       button.querySelector('.admin-tool-arrow').textContent=allowed?'→':'需授权';
     });
+    // 员工分流那张表是服务端的事实：这一页有权限就顺手读一次（概览里的「可参与接待」
+    // 要用同一个数），没权限就连数据一起清掉——不能让上一个角色的比例留在页面上。
+    if(canAccess('routing'))window.RoutingPortal?.open();
+    else window.RoutingPortal?.leave();
     renderAll();switchView('overview');
   }
   byId('admin-period').onchange=event=>{period=event.target.value;renderAll()};
@@ -213,13 +230,15 @@
   byId('admin-compare-metric').onchange=renderCompare;
   byId('admin-permission-staff').onchange=event=>{permissionStaffId=event.target.value;renderPermissions()};
   byId('admin-save-permissions').onclick=savePermissions;
-  byId('admin-save-routing').onclick=saveRouting;
+  byId('admin-routing-save').onclick=()=>void saveRouting();
   byId('admin-record-search').oninput=renderRecords;
   byId('admin-record-staff').onchange=renderRecords;
   byId('admin').querySelectorAll('[data-admin-view]').forEach(button=>button.onclick=()=>switchView(button.dataset.adminView));
   window.AdminPortal={
     open:refreshAccess,
     refreshAccess,
+    // 分流比例读到之后要重画概览：那一格的数字跟着服务端的事实走。
+    refreshOverview:renderOverview,
     showPermissions:id=>{if(employee(id))permissionStaffId=id;switchView('permissions')}
   };
 })();

@@ -8,14 +8,32 @@
  *    New conversations, conversations reopened by a new inbound message, and
  *    conversations an agent handed back all become due at the instant they
  *    enter the pool.
- * 2. **The sweep gives it to the eligible agent with the fewest conversations
- *    already in progress** ({@link selectAutoAssignee}).
+ * 2. **The sweep gives it to the eligible agent with the smallest load per unit
+ *    of 分流权重** ({@link selectAutoAssignee}): conversations already in
+ *    progress divided by the seat's weight. Every seat weighs
+ *    {@link DEFAULT_ASSIGNMENT_WEIGHT} until an administrator sets otherwise, so
+ *    a deployment that never opens the setting behaves exactly as it did before
+ *    the setting existed.
  * 3. **When nobody is eligible** the conversation stays in the pool, still due,
  *    and the customer gets one offline auto-reply ({@link planAutoAssign}
  *    reports the need; the caller sends it). Because the entry stays due, the
  *    next sweep retries it — so an agent who comes online a minute later still
  *    picks up the conversation. There is no attempt budget and no retry
  *    cadence to configure: the pool *is* the retry.
+ *
+ * ## 分流权重
+ *
+ * A weight is a **relative share**, not a percentage: what decides is the ratio
+ * between seats, so `60 / 40` and `6 / 4` are the same policy and the numbers
+ * never have to add up to anything. `weight: 0` takes a seat out of *automatic*
+ * assignment; it stays a valid manual transfer target, because naming a seat by
+ * hand is a different act from the dispatcher choosing one, and only the first
+ * is what an administrator configures here.
+ *
+ * The rule reads the weight off {@link AssignmentCandidate.weight}, which both
+ * adapters fill from storage, applying {@link DEFAULT_ASSIGNMENT_WEIGHT} where no
+ * row exists — so a weight is a fact about a seat, like its presence, rather than
+ * a second decision path through the dispatcher.
  *
  * ## Departure from the SDD-009 specification
  *
@@ -48,6 +66,64 @@ import type { Conversation, Member, PlatformRole } from './types';
  * consecutive heartbeats before it silently drops out of dispatch.
  */
 export const AGENT_PRESENCE_TTL_MS = 60_000;
+
+/**
+ * The weight a seat counts with until an administrator sets another one.
+ *
+ * A deployment that never opens 会话分流 therefore keeps exactly the behaviour
+ * it had before the setting existed: every seat weighs the same, so the least
+ * loaded one wins. The default lives here rather than in a column `DEFAULT` so
+ * the in-memory adapter, the SQL adapter and the settings surface cannot
+ * disagree about what an unconfigured seat weighs.
+ */
+export const DEFAULT_ASSIGNMENT_WEIGHT = 1;
+
+/**
+ * The largest weight an administrator may set.
+ *
+ * A relative weight is a ratio, so the useful range starts at `0` and any
+ * ceiling is arbitrary; this one exists so a typo — a percentage pasted in as
+ * `10000` — cannot make one seat swallow the queue. Because only the ratio
+ * matters, capping at 1000 costs no policy that could not be expressed by
+ * dividing every seat by ten.
+ */
+export const ASSIGNMENT_WEIGHT_MAX = 1000;
+
+/**
+ * One seat's share of the automatic assignment, as stored.
+ *
+ * **A seat with no row weighs {@link DEFAULT_ASSIGNMENT_WEIGHT}**, so the table
+ * holds deliberate choices only and an unconfigured tenant reads back empty.
+ * `updatedBy` is the administrator who last saved the seat, and is `null` when
+ * that member is gone — the weight outlives its author, so the row is not
+ * deleted with them.
+ */
+export type ConversationRoutingWeight = {
+  readonly tenantId: string;
+  readonly memberId: string;
+  readonly weight: number;
+  readonly updatedAt: string;
+  readonly updatedBy: string | null;
+};
+
+/**
+ * Whether a value may be stored as a seat's 分流权重.
+ *
+ * Non-negative integers only: a weight is a count of shares, and `2.5` shares
+ * has no meaning an administrator could have intended. `0` is valid and means
+ * "no automatic assignment" (see {@link selectAutoAssignee}).
+ *
+ * @param value - The candidate value, from a request body or a stored row.
+ * @returns `true` when it may be stored.
+ */
+export function isValidAssignmentWeight(value: unknown): value is number {
+  return (
+    typeof value === 'number' &&
+    Number.isInteger(value) &&
+    value >= 0 &&
+    value <= ASSIGNMENT_WEIGHT_MAX
+  );
+}
 
 /**
  * The offline auto-reply the customer receives when nobody can take the
@@ -154,8 +230,9 @@ export type ConversationAssignment = {
  * One agent seat as the assignment rules see it.
  *
  * `inProgressCount` is how many conversations this seat is already handling
- * (`status = 'claimed'` and assigned to it). {@link selectAutoAssignee} picks
- * the smallest, which is what "进行中会话最少" asks for.
+ * (`status = 'claimed'` and assigned to it). {@link selectAutoAssignee} divides
+ * that count by `weight` and picks the smallest quotient, which is what
+ * "进行中会话最少" asks for once 分流权重 exists.
  */
 export type AssignmentCandidate = {
   readonly memberId: string;
@@ -166,6 +243,11 @@ export type AssignmentCandidate = {
   readonly status: AgentAvailabilityStatus;
   readonly heartbeatAt: string | null;
   readonly inProgressCount: number;
+  /**
+   * 分流权重: how many shares of the queue this seat counts for. `0` means it
+   * takes no automatic assignment. See {@link selectAutoAssignee}.
+   */
+  readonly weight: number;
 };
 
 /** The eligibility verdict for one candidate. */
@@ -268,10 +350,18 @@ export function assignmentEligibility(input: {
 /**
  * Choose the agent an assignment should hand the conversation to.
  *
- * Least-loaded wins: the eligible seat with the fewest conversations already
- * in progress. Ties break on `memberId` in code-unit order — **not**
- * `localeCompare`, which would make the answer depend on the host locale and
- * let two replicas pick different winners from identical data.
+ * Least-loaded wins: the eligible seat with the smallest in-progress count per
+ * unit of 分流权重 ({@link AssignmentCandidate.weight}). Ties break on `memberId`
+ * in code-unit order — **not** `localeCompare`, which would make the answer
+ * depend on the host locale and let two replicas pick different winners from
+ * identical data.
+ *
+ * A seat weighing `0` is skipped here rather than refused by
+ * {@link assignmentEligibility}, because the two answer different questions:
+ * eligibility says whether this *seat* may be given work at all, and a weight of
+ * zero says only that the dispatcher should not be the one to choose it. A
+ * zero-weight seat is still a valid manual transfer target, which is exactly what
+ * `transferTargetRefusal` keeps asking about.
  *
  * @param candidates - Every seat of the store, eligible or not.
  * @param conversationStoreId - The store whose pool this is.
@@ -286,12 +376,14 @@ export function selectAutoAssignee(
   ttlMs: number = AGENT_PRESENCE_TTL_MS,
 ): AssignmentCandidate | undefined {
   const eligible = candidates.filter(
-    (candidate) => assignmentEligibility({ candidate, conversationStoreId, now, ttlMs }).eligible,
+    (candidate) =>
+      candidate.weight > 0 &&
+      assignmentEligibility({ candidate, conversationStoreId, now, ttlMs }).eligible,
   );
   if (eligible.length === 0) {
     return undefined;
   }
-  return [...eligible].sort(byLeastLoaded)[0];
+  return [...eligible].sort(byWeightedLoad)[0];
 }
 
 /**
@@ -526,10 +618,22 @@ export function rejectionReasonCode(code: ConversationTransitionErrorCode): Assi
   }
 }
 
-/** Retry order: fewest in progress first, then lowest member id. */
-function byLeastLoaded(a: AssignmentCandidate, b: AssignmentCandidate): number {
-  if (a.inProgressCount !== b.inProgressCount) {
-    return a.inProgressCount - b.inProgressCount;
+/**
+ * Retry order: smallest in-progress count per unit of weight, then lowest member
+ * id.
+ *
+ * The ratio is compared by cross-multiplying integers rather than by dividing,
+ * so seats that are *exactly* equal cannot be separated by floating-point
+ * rounding: `3 / 7` and `6 / 14` are the same load and must tie (and then be
+ * broken by id) rather than be ordered by which division came out 1 ULP smaller.
+ * With integer weights up to `ASSIGNMENT_WEIGHT_MAX` and realistic queue depths
+ * the products stay far inside exact-integer range.
+ */
+function byWeightedLoad(a: AssignmentCandidate, b: AssignmentCandidate): number {
+  const left = a.inProgressCount * b.weight;
+  const right = b.inProgressCount * a.weight;
+  if (left !== right) {
+    return left - right;
   }
   if (a.memberId === b.memberId) {
     return 0;

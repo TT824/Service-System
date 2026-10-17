@@ -1046,7 +1046,7 @@ describe('RealWecomAdapter sending', () => {
     expect(await adapter.sendMessage(sendInput({ messageType: 'image', content: '' }))).toEqual({
       ok: false,
       code: 'channel_invalid_request',
-      message: 'an image delivery requires an uploaded media id',
+      message: 'a WeCom image delivery requires an uploaded media id',
       retryable: false,
     });
     expect(http.requests).toHaveLength(0);
@@ -1184,6 +1184,34 @@ describe('RealWecomAdapter media upload', () => {
     return http.matching('/cgi-bin/media/upload')[0];
   }
 
+  it('uploads a file under the type and the name the caller carried', async () => {
+    const http = new FakeWecomHttp((request) =>
+      request.url.includes('/cgi-bin/media/upload')
+        ? { status: 200, body: { errcode: 0, errmsg: 'ok', media_id: 'MEDIA-FILE-1' } }
+        : TOKEN_ANSWER,
+    );
+    const { adapter } = buildAdapter({ http });
+
+    const result = await adapter.uploadMedia({
+      tenantId: SCOPE.tenantId,
+      storeId: SCOPE.storeId,
+      kind: 'file',
+      mimeType: 'application/pdf',
+      bytes: IMAGE,
+      fileName: '报价单.pdf',
+    });
+
+    expect(result).toEqual({ ok: true, value: { mediaId: 'MEDIA-FILE-1' } });
+    const upload = uploadOf(http);
+    // The kind is what the provider measures the payload against, and the part
+    // header is the only place the name the customer will see can travel.
+    expect(upload?.url).toContain('type=file');
+    expect(upload?.multipart).toMatchObject({
+      filename: '报价单.pdf',
+      contentType: 'application/pdf',
+    });
+  });
+
   it('uploads the image through the shared port and returns the provider media id', async () => {
     const http = new FakeWecomHttp((request) =>
       request.url.includes('/cgi-bin/media/upload')
@@ -1195,6 +1223,7 @@ describe('RealWecomAdapter media upload', () => {
     const result = await adapter.uploadMedia({
       tenantId: SCOPE.tenantId,
       storeId: SCOPE.storeId,
+      kind: 'image',
       mimeType: 'image/png',
       bytes: IMAGE,
     });
@@ -1233,6 +1262,7 @@ describe('RealWecomAdapter media upload', () => {
     const refused = await adapter.uploadMedia({
       tenantId: SCOPE.tenantId,
       storeId: SCOPE.storeId,
+      kind: 'image',
       mimeType: 'image/png',
       bytes: IMAGE,
     });
@@ -1253,9 +1283,9 @@ describe('RealWecomAdapter media upload', () => {
     const { adapter } = buildAdapter({ http });
 
     for (const input of [
-      { mimeType: 'application/pdf', bytes: IMAGE },
-      { mimeType: 'image/png', bytes: new Uint8Array(0) },
-    ]) {
+      { kind: 'image', mimeType: 'application/pdf', bytes: IMAGE },
+      { kind: 'image', mimeType: 'image/png', bytes: new Uint8Array(0) },
+    ] as const) {
       await expect(
         adapter.uploadMedia({
           tenantId: SCOPE.tenantId,
@@ -1280,6 +1310,7 @@ describe('RealWecomAdapter media upload', () => {
     const uploaded = await adapter.uploadMedia({
       tenantId: SCOPE.tenantId,
       storeId: SCOPE.storeId,
+      kind: 'image',
       mimeType: 'image/png',
       bytes: IMAGE,
     });
@@ -1343,6 +1374,7 @@ describe('RealWecomAdapter configuration and unbound operations', () => {
       adapter.uploadMedia({
         tenantId: SCOPE.tenantId,
         storeId: SCOPE.storeId,
+        kind: 'image',
         mimeType: 'image/png',
         bytes: new Uint8Array([1, 2, 3]),
       }),

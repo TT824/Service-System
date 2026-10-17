@@ -477,6 +477,89 @@ describe('InMemoryAuthRepository member links', () => {
   });
 });
 
+describe('InMemoryAuthRepository member avatars', () => {
+  /** A one-pixel PNG: the smallest thing the platform will accept. */
+  const PNG =
+    'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==';
+
+  /** An account holding one member, so the join has both of its halves. */
+  async function linked(
+    repository: InMemoryAuthRepository,
+    overrides: { userId: string; memberId: string; linkId: string; avatarUrl: string | null },
+  ) {
+    await repository.saveUser(account({ id: overrides.userId, avatarUrl: overrides.avatarUrl }));
+    await repository.saveLink({
+      id: overrides.linkId,
+      userId: overrides.userId,
+      tenantId: SEEDED_TENANTS[0]?.id ?? null,
+      memberId: overrides.memberId,
+      linkedBy: null,
+      linkedAt: NOW,
+      revokedAt: null,
+      createdAt: NOW,
+      updatedAt: NOW,
+    });
+  }
+
+  it('answers with the picture of each linked member', async () => {
+    const repository = new InMemoryAuthRepository();
+    const [first, second] = SEEDED_MEMBERS;
+    await linked(repository, {
+      userId: 'user-0001',
+      memberId: first?.id ?? '',
+      linkId: 'link-0001',
+      avatarUrl: PNG,
+    });
+    await linked(repository, {
+      userId: 'user-0002',
+      memberId: second?.id ?? '',
+      linkId: 'link-0002',
+      avatarUrl: null,
+    });
+
+    const avatars = await repository.listMemberAvatars([
+      first?.id ?? '',
+      second?.id ?? '',
+      'member-unknown',
+    ]);
+
+    // Only the member who actually has one: no picture and no such member are
+    // both simply absent rather than errors, and the caller draws the initial.
+    expect([...avatars]).toEqual([[first?.id ?? '', PNG]]);
+    expect(avatars.get(second?.id ?? '')).toBeUndefined();
+  });
+
+  it('ignores a revoked link, so a former holder does not carry a picture', async () => {
+    const repository = new InMemoryAuthRepository();
+    const memberId = SEEDED_MEMBERS[0]?.id ?? '';
+    await linked(repository, {
+      userId: 'user-0001',
+      memberId,
+      linkId: 'link-0001',
+      avatarUrl: PNG,
+    });
+    await repository.saveLink({
+      id: 'link-0001',
+      userId: 'user-0001',
+      tenantId: SEEDED_TENANTS[0]?.id ?? null,
+      memberId,
+      linkedBy: null,
+      linkedAt: NOW,
+      revokedAt: NOW,
+      createdAt: NOW,
+      updatedAt: NOW,
+    });
+
+    expect((await repository.listMemberAvatars([memberId])).size).toBe(0);
+  });
+
+  it('asks for nothing when the caller names nobody', async () => {
+    const repository = new InMemoryAuthRepository();
+
+    expect((await repository.listMemberAvatars([])).size).toBe(0);
+  });
+});
+
 describe('InMemoryAuthRepository trial workspaces', () => {
   /** Build the four rows a provisioning call writes, from an account. */
   function workspace(overrides: { userId?: string; tenantCode?: string } = {}) {

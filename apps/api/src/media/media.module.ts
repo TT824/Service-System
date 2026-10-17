@@ -44,6 +44,10 @@ const mediaStorageProvider: Provider = {
 @Module({
   controllers: [MediaController],
   providers: [mediaStorageProvider, MediaUrlService, MessageMediaService],
-  exports: [MessageMediaService, MediaUrlService],
+  // `MEDIA_STORAGE` is exported because the internal-chat module writes to the
+  // same object store from a different direction — a colleague uploading a file
+  // rather than the platform fetching one. One binding for one store: a second
+  // provider would be a second bucket the moment the two configurations drifted.
+  exports: [MessageMediaService, MediaUrlService, MEDIA_STORAGE],
 })
 export class MediaModule {}

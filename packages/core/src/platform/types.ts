@@ -55,8 +55,14 @@ export type ConversationStatus = 'open' | 'claimed' | 'closed';
 /** Direction of a message relative to the platform. */
 export type MessageDirection = 'inbound' | 'outbound';
 
-/** Message payload types the MVP understands. */
-export type MessageType = 'text' | 'image' | 'link';
+/**
+ * Message payload types the MVP understands.
+ *
+ * `text` and `link` are delivered as themselves. The other three are the ones a
+ * channel has to upload before it can send them, because the providers that
+ * carry them take a media handle rather than the bytes.
+ */
+export type MessageType = 'text' | 'image' | 'video' | 'file' | 'link';
 
 /**
  * Allowed values for the outbound message source. Direct and edited candidate
@@ -105,6 +111,59 @@ export function isReviewEligibleSource(source: MessageSource): boolean {
  */
 export function countsAsFirstReply(source: MessageSource): boolean {
   return source !== 'other';
+}
+
+/**
+ * Media as a caller hands it over, before it becomes {@link MessageMedia}.
+ *
+ * The name may be absent and the provider's handle may be absent — an outbound
+ * picture picked without a file name has neither — and both are normalized to
+ * `null` on the way into the row, so no reader has to tell `undefined` from
+ * "there is none".
+ */
+export type MessageMediaInput = {
+  readonly key: string;
+  readonly mimeType: string;
+  readonly bytes: number;
+  readonly name?: string | null;
+  readonly providerMediaId?: string | null;
+};
+
+/**
+ * The media of an outbound message, refusing the two shapes nothing can read.
+ *
+ * A media message with no media is a bubble that can never be filled; a text
+ * message with media is a picture no transcript would draw. Both are mistakes in
+ * a caller rather than states a customer can produce, so they are thrown on
+ * rather than stored — which means the rule has to be in one place, and this is
+ * it: keeping it here rather than at the two `sendOutbound` call sites is what
+ * stops the SQL and in-memory adapters from disagreeing about what a message is.
+ *
+ * @param input - The message kind and the media the caller supplied.
+ * @returns The media to record, or `null` for a message that has none.
+ * @throws {Error} When the kind and the media disagree.
+ */
+export function outboundMessageMedia(input: {
+  readonly messageType: MessageType;
+  readonly media: MessageMediaInput | null;
+}): MessageMedia | null {
+  if (input.messageType === 'text' || input.messageType === 'link') {
+    if (input.media !== null) {
+      throw new Error(`cannot send a ${input.messageType} message with media attached`);
+    }
+    return null;
+  }
+  const media = input.media;
+  if (media === null) {
+    throw new Error(`cannot send a ${input.messageType} message with no media`);
+  }
+  return {
+    key: media.key,
+    mimeType: media.mimeType,
+    bytes: media.bytes,
+    name: media.name ?? null,
+    providerMediaId: media.providerMediaId ?? null,
+  };
 }
 
 /** Review lifecycle of a message. */
@@ -194,6 +253,26 @@ export type MessageMedia = {
   readonly mimeType: string;
   /** Size in bytes. */
   readonly bytes: number;
+  /**
+   * What the file is called, or `null` when nothing named it.
+   *
+   * Only an outbound document or clip has one: the seat picked a file with a
+   * name, and for those two kinds the name is most of what the bubble says.
+   * An inbound picture arrives without one — the provider hands us bytes and a
+   * content type and no file name of its own — and a customer's screenshot has
+   * never had a name worth showing.
+   */
+  readonly name: string | null;
+  /**
+   * The provider's handle for these bytes, or `null` when there is none.
+   *
+   * Written outbound and only outbound: the channel will not accept a message
+   * naming a `media_id` it has not been given, so the upload happens before the
+   * row is written and the handle is recorded with it. Inbound media has no
+   * handle worth keeping — the bytes were downloaded from the provider's
+   * temporary copy, and that copy expires in days.
+   */
+  readonly providerMediaId: string | null;
 };
 
 /** A persisted conversation message. */
@@ -319,6 +398,53 @@ export type ShortcutPatch = {
   readonly content?: string;
   readonly intentCode?: string | null;
   readonly sortOrder?: number;
+  readonly enabled?: boolean;
+};
+
+/**
+ * A personal quick phrase: the canned replies one agent keeps for themselves.
+ *
+ * Not knowledge the tenant owns, and not a shortcut with a different owner. A
+ * shortcut is a fact about the merchant — 本店发货时效 is the same answer whoever
+ * gives it — while a personal phrase is a working note: 欢迎语 in one's own words,
+ * a follow-up sentence one has settled on. Nothing about it is shared, so
+ * `memberId` is a column of the row and never a filter the caller supplies; the
+ * server takes the owner from the authenticated session and the client can
+ * neither read nor name anybody else's.
+ *
+ * There is deliberately no `code` and no `storeId`: personal phrases are not
+ * addressed by anything and are not per-store.
+ */
+export type PersonalPhrase = {
+  readonly id: string;
+  readonly tenantId: string;
+  readonly memberId: string;
+  /** Display grouping the UI offers as a filter; `''` when the agent left it out. */
+  readonly category: string;
+  readonly title: string;
+  /** Words that should make the phrase surface while the agent types. */
+  readonly keywords: ReadonlyArray<string>;
+  /** The reply text inserted into the composer. */
+  readonly text: string;
+  readonly enabled: boolean;
+  readonly updatedAt: string;
+  readonly createdAt: string;
+};
+
+/**
+ * The mutable fields of a personal phrase; omitted fields keep their value.
+ *
+ * The owner is deliberately not patchable, for the same reason a shortcut's
+ * scope is not: a phrase that changed hands is not the same phrase, and the
+ * recipient never agreed to own it. An empty `keywords` array is a real value
+ * (clear the words), which is why the patch distinguishes absent from empty
+ * rather than treating both as "keep".
+ */
+export type PersonalPhrasePatch = {
+  readonly category?: string;
+  readonly title?: string;
+  readonly keywords?: ReadonlyArray<string>;
+  readonly text?: string;
   readonly enabled?: boolean;
 };
 

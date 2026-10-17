@@ -47,6 +47,7 @@ import {
 import {
   addMilliseconds,
   DEFAULT_AUTH_POLICY,
+  effectiveAccountStatus,
   effectiveDeviceStatus,
   isDeviceUsable,
   isOtpResendCoolingDown,
@@ -631,10 +632,7 @@ export class AuthService {
     }
 
     const now = this.#clock.now();
-    const locked =
-      user.status === 'locked' &&
-      user.lockedUntil !== null &&
-      Date.parse(user.lockedUntil) > Date.parse(now);
+    const locked = effectiveAccountStatus(user, now) === 'locked';
     if (locked) {
       throw new AuthError('account_locked', 'the account is temporarily locked');
     }
@@ -1410,15 +1408,11 @@ export class AuthService {
 
   /** Throw unless an account may sign in right now. */
   #assertAccountUsable(account: UserAccount): void {
-    if (account.status === 'disabled') {
+    const status = effectiveAccountStatus(account, this.#clock.now());
+    if (status === 'disabled') {
       throw new AuthError('account_disabled', 'the account is disabled');
     }
-    const now = this.#clock.now();
-    if (
-      account.status === 'locked' &&
-      account.lockedUntil !== null &&
-      Date.parse(account.lockedUntil) > Date.parse(now)
-    ) {
+    if (status === 'locked') {
       throw new AuthError('account_locked', 'the account is temporarily locked');
     }
   }
@@ -1512,7 +1506,10 @@ export class AuthService {
 
     const input: AccessResolutionInput = {
       session,
-      accountStatus: account.status,
+      // The status as of now, not the stored word: nothing rewrites `status` back
+      // to `active` when a lock lapses, so reading it verbatim would strand a
+      // signed-in session outside every business surface after the lock expired.
+      accountStatus: effectiveAccountStatus(account, this.#clock.now()),
       member: member ?? null,
       tenant,
       link: member === undefined ? undefined : link,

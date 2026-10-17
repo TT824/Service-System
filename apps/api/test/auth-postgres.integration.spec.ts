@@ -50,6 +50,9 @@ const RUN = randomUUID().slice(0, 8);
 const PASSWORD = 'correct-horse-battery-staple';
 /** Password the recovery flow switches to. */
 const NEW_PASSWORD = 'a-completely-different-passphrase';
+/** A one-pixel PNG: the smallest picture the schema's CHECK will accept. */
+const ONE_PIXEL_PNG =
+  'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==';
 
 /**
  * A destination no other row can collide with.
@@ -474,6 +477,46 @@ describe.skipIf(!reachable)('Authentication persistence (PostgreSQL)', () => {
       created.stores.push(workspace.store.id);
     }
   }
+
+  it('reads each member picture through the link that account holds', async () => {
+    // The picture lives on the account and the member reaches it through an
+    // active link, so the answer is a join — and the failure mode a join has and
+    // a per-row read does not is picking up somebody else's row. Two members of
+    // two different accounts, only one of which has a picture, is the smallest
+    // arrangement in which that mistake is visible.
+    const withPicture = await accountWithoutWorkspace('avatar');
+    const withoutPicture = await accountWithoutWorkspace('noavatar');
+    const first = await repository.provisionTrialWorkspace(trialInput(withPicture));
+    const second = await repository.provisionTrialWorkspace(trialInput(withoutPicture));
+    track(first);
+    track(second);
+    await repository.saveUser({
+      ...withPicture,
+      avatarUrl: ONE_PIXEL_PNG,
+      updatedAt: new Date().toISOString(),
+    });
+
+    const both = await repository.listMemberAvatars([first.member.id, second.member.id]);
+    expect(both.get(first.member.id)).toBe(ONE_PIXEL_PNG);
+    // An account that exists and holds no picture is absent, not an empty
+    // string: the caller falls back to the display name's first letter.
+    expect(both.has(second.member.id)).toBe(false);
+
+    // Asked one at a time, each answer is still about that member alone.
+    expect((await repository.listMemberAvatars([first.member.id])).size).toBe(1);
+    expect((await repository.listMemberAvatars([second.member.id])).size).toBe(0);
+    expect((await repository.listMemberAvatars([])).size).toBe(0);
+
+    // A revoked link is a former holder, not a colleague: the whole point of
+    // revoking it is that the member stops standing for that account, and its
+    // picture is part of what the member stood for.
+    await repository.saveLink({
+      ...first.link,
+      revokedAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    });
+    expect((await repository.listMemberAvatars([first.member.id])).size).toBe(0);
+  });
 
   it('rolls a partially provisioned workspace back when a later write fails', async () => {
     // A workspace that really exists, so the failure can reuse a committed id.

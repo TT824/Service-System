@@ -5,16 +5,19 @@ import {
   createUnifiedMessage,
   type ChannelAdapter,
   type ChannelCapabilities,
+  type ChannelOutboxRecord,
   type ChannelResult,
   type Conversation,
   type Member,
   type Message,
+  type SendMessageInput,
   type SendMessageResult,
   type UnifiedMessage,
   type WebhookVerificationInput,
   type WebhookVerificationResult,
 } from '@kefu/core';
 import { ChannelDeliveryService } from './channel-delivery.service';
+import type { QuotaWindowKey } from './channel-reliability.repository';
 import { MemoryChannelReliabilityRepository } from './memory-channel-reliability.repository';
 import { MemoryPlatformRepository } from '../platform/memory-platform.repository';
 import { RealtimeService } from '../realtime/realtime.service';
@@ -119,7 +122,7 @@ class RecordingAdapter implements ChannelAdapter {
   }
 
   /** @inheritdoc */
-  async sendMessage(): Promise<ChannelResult<SendMessageResult>> {
+  async sendMessage(_input: SendMessageInput): Promise<ChannelResult<SendMessageResult>> {
     throw new Error('sendMessage is not part of this test');
   }
 
@@ -561,10 +564,15 @@ describe('ChannelDeliveryService inbound media', () => {
     expect(adapter.mediaFetches).toEqual(['MEDIA_ID_1']);
 
     const message = await ingestedMessage(harness);
+    // The two nulls are part of the assertion: what the customer sent is an
+    // unnamed picture whose provider handle is a copy that expires in days, and
+    // both absences are recorded rather than left as `undefined`.
     expect(message.media).toEqual({
       key: `tenants/${KNOWN_TENANT}/messages/${message.id}`,
       mimeType: 'image/png',
       bytes: image.byteLength,
+      name: null,
+      providerMediaId: null,
     });
     // The bytes under that key are the ones the provider gave, which is what
     // makes the reference a fact rather than a promise.
@@ -599,5 +607,157 @@ describe('ChannelDeliveryService inbound media', () => {
 
     expect(adapter.mediaFetches).toEqual([]);
     expect(harness.storage.writes).toEqual([]);
+  });
+});
+
+/**
+ * An adapter that runs a hook while a send is in flight.
+ *
+ * This API sends a reply inline rather than waiting for the Worker, and the
+ * state the outbox entry is in during that round trip — `pending`, lease free —
+ * is exactly what the Worker's poll takes. The duplicate that would cause is
+ * concurrent, so a test has to look *during* the send rather than after it:
+ * `sendMessage` claims the entry the way the Worker would, before it answers.
+ */
+class ObservableSendAdapter extends RecordingAdapter {
+  /** Answers sent, so a test can tell "not called" from "called and failed". */
+  sendCount = 0;
+
+  /** What the Worker-shaped claim found mid-send; `'not-attempted'` if never run. */
+  workerClaimDuringSend: unknown = 'not-attempted';
+
+  /**
+   * The entry that claim contended for.
+   *
+   * Kept so a test can prove the claim was refused by a *live lease* rather than
+   * by the entry not existing — a missing entry is refused too, and would let
+   * the duplicate-send test pass while proving nothing.
+   */
+  workerClaimEntry: ChannelOutboxRecord | undefined;
+
+  /**
+   * @param reliability - The same store the service leases the entry in, so the
+   *   hook contends for the real lease rather than a copy of it.
+   */
+  constructor(private readonly reliability: MemoryChannelReliabilityRepository) {
+    super({ ok: true, value: { verified: true } });
+  }
+
+  /** @inheritdoc */
+  override async sendMessage(input: SendMessageInput): Promise<ChannelResult<SendMessageResult>> {
+    this.sendCount += 1;
+    // `correlationId` is the delivery id — the same key the Worker looks the
+    // entry up by, so this hook contends for the entry genuinely.
+    const entry = await this.reliability.getOutboxByDelivery(input.tenantId, input.correlationId);
+    this.workerClaimEntry = entry;
+    this.workerClaimDuringSend = await this.reliability.claimOutboxForSend({
+      tenantId: input.tenantId,
+      outboxId: entry?.id ?? 'missing',
+      owner: 'worker',
+      now: new Date().toISOString(),
+      leaseMs: 60_000,
+    });
+    return { ok: true, value: { externalMessageId: 'external-send-1' } };
+  }
+}
+
+/** The outbound half of the loop: a store, an adapter and the service over them. */
+function outboundHarness(): {
+  readonly service: ChannelDeliveryService;
+  readonly platform: MemoryPlatformRepository;
+  readonly reliability: MemoryChannelReliabilityRepository;
+  readonly adapter: ObservableSendAdapter;
+} {
+  const platform = new MemoryPlatformRepository(new KefuStore());
+  const reliability = new MemoryChannelReliabilityRepository();
+  const adapter = new ObservableSendAdapter(reliability);
+  return {
+    service: new ChannelDeliveryService(
+      platform,
+      reliability,
+      adapter,
+      new RealtimeService(),
+      new MessageMediaService(platform, new MemoryMediaStorage(), quietLogger()),
+      quietLogger(),
+    ),
+    platform,
+    reliability,
+    adapter,
+  };
+}
+
+/** The reply-window key of the customer every case here replies to. */
+function windowKeyOf(storeId: string = KNOWN_STORE): QuotaWindowKey {
+  return {
+    tenantId: KNOWN_TENANT,
+    storeId,
+    channel: CHANNEL_PROVIDER_WECOM,
+    externalCustomerId: CUSTOMER,
+  };
+}
+
+describe('ChannelDeliveryService outbox lease', () => {
+  /** Seed one inbound message so there is a conversation and a message to reply to. */
+  async function seedInbound(
+    platform: MemoryPlatformRepository,
+  ): Promise<{ readonly conversation: Conversation; readonly message: Message }> {
+    const ingested = await platform.ingestInbound({
+      tenantId: KNOWN_TENANT,
+      storeId: KNOWN_STORE,
+      channel: CHANNEL_PROVIDER_WECOM,
+      externalCustomerId: CUSTOMER,
+      externalConversationId: 'wm-conversation-lease-1',
+      content: '在吗',
+    });
+    return { conversation: ingested.conversation, message: ingested.message };
+  }
+
+  it('holds the send lease for the whole provider round trip, so the Worker cannot send the same reply', async () => {
+    const harness = outboundHarness();
+    const { conversation, message } = await seedInbound(harness.platform);
+    const now = new Date().toISOString();
+    await harness.reliability.openQuotaWindow(windowKeyOf(), now);
+
+    const delivery = await harness.service.dispatch(conversation, message);
+
+    expect(delivery.status).toBe('sent');
+    expect(harness.adapter.sendCount).toBe(1);
+    // The claim contended for a real entry, so the refusal below is the lease
+    // talking and not a lookup that found nothing.
+    expect(harness.adapter.workerClaimEntry).toMatchObject({ status: 'pending' });
+    // The claim the Worker's poll would have made, taken mid-send, found the
+    // entry leased — which is the whole reason the reply is not sent twice.
+    expect(harness.adapter.workerClaimDuringSend).toBeUndefined();
+    // And once the send is done the entry is `dispatched`, so a later Worker
+    // pass cannot take it either: the lease is released, not merely expired.
+    expect(await harness.reliability.getOutboxByDelivery(KNOWN_TENANT, delivery.id)).toMatchObject({
+      status: 'dispatched',
+    });
+  });
+
+  it('gives the lease back when a reply is refused before the provider is called', async () => {
+    const harness = outboundHarness();
+    const { conversation, message } = await seedInbound(harness.platform);
+    // No window is opened, so the reply is refused with `window_missing`.
+    const delivery = await harness.service.dispatch(conversation, message);
+
+    expect(delivery).toMatchObject({
+      status: 'pending',
+      failureCode: 'window_missing',
+      retryable: true,
+    });
+    expect(harness.adapter.sendCount).toBe(0);
+    // Nothing reached the adapter, so the entry must be immediately claimable
+    // again — a refusal held under a lease would delay the retry it exists to
+    // allow by the full lease for no reason at all.
+    const entry = await harness.reliability.getOutboxByDelivery(KNOWN_TENANT, delivery.id);
+    const reclaimed = await harness.reliability.claimOutboxForSend({
+      tenantId: KNOWN_TENANT,
+      outboxId: entry?.id ?? 'missing',
+      owner: 'worker',
+      now: new Date().toISOString(),
+      leaseMs: 60_000,
+    });
+    expect(reclaimed).toMatchObject({ status: 'pending', attemptCount: 0 });
   });
 });

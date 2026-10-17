@@ -107,6 +107,9 @@ function postCallback(
   callback: SignedCallback,
   signature = callback.signature,
 ): request.Test {
+  // Callers assert `200`: WeCom reads only `200` as "received" and retries
+  // anything else, so both callback routes answer it instead of the `201` Nest
+  // would give a POST.
   return request(app.getHttpServer())
     .post(`/api/v1/channels/wecom/webhook?timestamp=${TIMESTAMP}&nonce=${NONCE}`)
     .query({ msg_signature: signature })
@@ -388,7 +391,7 @@ describe('WeCom customer-service callback with a bound scope (interface)', () =>
       Content: '订单还没发货吗？',
     });
 
-    const response = await postCallback(app, callback).expect(201);
+    const response = await postCallback(app, callback).expect(200);
     const ingested = (response.body as { data: Record<string, unknown> }).data;
 
     expect(ingested).toMatchObject({
@@ -420,7 +423,7 @@ describe('WeCom customer-service callback with a bound scope (interface)', () =>
       Content: '',
     });
 
-    const response = await postCallback(app, callback).expect(201);
+    const response = await postCallback(app, callback).expect(200);
     const ingested = (response.body as { data: Record<string, unknown> }).data;
     expect(ingested).toMatchObject({
       status: 'processed',
@@ -451,9 +454,9 @@ describe('WeCom customer-service callback with a bound scope (interface)', () =>
       MsgId: '910002',
     });
 
-    const first = await postCallback(app, callback).expect(201);
+    const first = await postCallback(app, callback).expect(200);
     const firstData = (first.body as { data: Record<string, unknown> }).data;
-    const replay = await postCallback(app, callback).expect(201);
+    const replay = await postCallback(app, callback).expect(200);
     const replayData = (replay.body as { data: Record<string, unknown> }).data;
 
     expect(replayData).toMatchObject({
@@ -488,7 +491,7 @@ describe('WeCom customer-service callback with a bound scope (interface)', () =>
       .set('x-tenant-id', OTHER_TENANT)
       .set('content-type', 'text/xml')
       .send(callback.body)
-      .expect(201);
+      .expect(200);
 
     expect((response.body as { data: Record<string, unknown> }).data).toMatchObject({
       status: 'processed',
@@ -724,7 +727,7 @@ describe('An account bound through the console and then called back (interface)'
     );
 
     const live = signedCallback({ FromUserName: 'wm-customer-bound-live', MsgId: '930002' });
-    const response = await postCallback(app, live).expect(201);
+    const response = await postCallback(app, live).expect(200);
     expect((response.body as { data: Record<string, unknown> }).data).toMatchObject({
       status: 'processed',
       created: true,

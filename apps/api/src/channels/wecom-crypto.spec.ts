@@ -1,7 +1,8 @@
-import { randomBytes } from 'node:crypto';
+import { createDecipheriv, randomBytes } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
 import {
   decryptWecomPayload,
+  encryptWecomPayload,
   readXmlField,
   signatureMatches,
   wecomSignature,
@@ -160,3 +161,103 @@ describe('readXmlField', () => {
     expect(readXmlField('<xml><MsgId>7</MsgId></xml>', 'Msg')).toBeNull();
   });
 });
+
+describe('encryptWecomPayload', () => {
+  it('mints a payload this module reads back, receiver id included', () => {
+    const encrypted = encryptWecomPayload(TEST_ENCODING_AES_KEY, 'echo-9876543210', TEST_CORP_ID);
+    expect(encrypted.ok).toBe(true);
+    if (!encrypted.ok) {
+      return;
+    }
+    expect(decryptWecomPayload(TEST_ENCODING_AES_KEY, encrypted.ciphertext, TEST_CORP_ID)).toEqual({
+      ok: true,
+      message: 'echo-9876543210',
+      receiveId: TEST_CORP_ID,
+    });
+  });
+
+  it('frames the plaintext the provider format describes, read by an opener written from it', () => {
+    // A message whose character count and byte count differ, so a length field
+    // that counted characters instead of bytes would be caught here.
+    const message = '回调自检：请原样返回这段明文';
+    const encrypted = encryptWecomPayload(TEST_ENCODING_AES_KEY, message, TEST_CORP_ID);
+    if (!encrypted.ok) {
+      throw new Error(encrypted.reason);
+    }
+    const framed = openWecomFrame(TEST_ENCODING_AES_KEY, encrypted.ciphertext);
+    expect(framed.message).toBe(message);
+    expect(framed.receiveId).toBe(TEST_CORP_ID);
+    // Exactly the documented frame: a 16-byte prefix, a 4-byte length, the
+    // message in UTF-8, and the receiver id with nothing after it.
+    expect(framed.plain.length).toBe(
+      RANDOM_PREFIX_LENGTH + LENGTH_FIELD_LENGTH + Buffer.byteLength(message) + TEST_CORP_ID.length,
+    );
+  });
+
+  it('draws a fresh random prefix every time', () => {
+    const first = encryptWecomPayload(TEST_ENCODING_AES_KEY, 'same plaintext', TEST_CORP_ID);
+    const second = encryptWecomPayload(TEST_ENCODING_AES_KEY, 'same plaintext', TEST_CORP_ID);
+    if (!first.ok || !second.ok) {
+      throw new Error('the fixture key must encrypt');
+    }
+    expect(first.ciphertext).not.toBe(second.ciphertext);
+    expect(openWecomFrame(TEST_ENCODING_AES_KEY, first.ciphertext).plain.subarray(0, 16)).not.toEqual(
+      openWecomFrame(TEST_ENCODING_AES_KEY, second.ciphertext).plain.subarray(0, 16),
+    );
+  });
+
+  it('appends the receiver id, so a reader checking it can refuse another corp', () => {
+    const encrypted = encryptWecomPayload(TEST_ENCODING_AES_KEY, 'echo', TEST_CORP_ID);
+    if (!encrypted.ok) {
+      throw new Error(encrypted.reason);
+    }
+    const wrongCorp = decryptWecomPayload(TEST_ENCODING_AES_KEY, encrypted.ciphertext, 'ww-other');
+    expect(wrongCorp.ok).toBe(false);
+  });
+
+  it('refuses what no reader could open', () => {
+    // An empty message would come back as a zero-length field, which the reader
+    // rejects as out of range — minting one would be producing a payload this
+    // module cannot open.
+    expect(encryptWecomPayload(TEST_ENCODING_AES_KEY, '', TEST_CORP_ID).ok).toBe(false);
+    expect(encryptWecomPayload('too-short', 'echo', TEST_CORP_ID).ok).toBe(false);
+    // 43 characters is the required length, but it is the *decoded* length that
+    // keys the cipher: a 43-character string of non-base64 characters decodes to
+    // nothing and cannot key a 32-byte AES key.
+    expect(encryptWecomPayload('!'.repeat(43), 'echo', TEST_CORP_ID).ok).toBe(false);
+  });
+});
+
+/** Frame lengths the format fixes, mirrored here so the assertion states them. */
+const RANDOM_PREFIX_LENGTH = 16;
+const LENGTH_FIELD_LENGTH = 4;
+
+/**
+ * Open a production ciphertext from the documented format alone.
+ *
+ * Deliberately not {@link decryptWecomPayload}: the writer and the reader are
+ * the one pair in this file where a single framing mistake would be invisible if
+ * the test reused either half, because each would compensate for the other.
+ *
+ * @param encodingAesKey - The 43-character `EncodingAESKey`.
+ * @param ciphertext - Base64 ciphertext produced by the encryptor.
+ * @returns The whole plaintext, the message and the receiver id.
+ */
+function openWecomFrame(
+  encodingAesKey: string,
+  ciphertext: string,
+): { readonly plain: Buffer; readonly message: string; readonly receiveId: string } {
+  const key = Buffer.from(`${encodingAesKey}=`, 'base64');
+  const decipher = createDecipheriv('aes-256-cbc', key, key.subarray(0, 16));
+  const plain = Buffer.concat([
+    decipher.update(Buffer.from(ciphertext, 'base64')),
+    decipher.final(),
+  ]);
+  const messageLength = plain.readUInt32BE(RANDOM_PREFIX_LENGTH);
+  const messageStart = RANDOM_PREFIX_LENGTH + LENGTH_FIELD_LENGTH;
+  return {
+    plain,
+    message: plain.subarray(messageStart, messageStart + messageLength).toString('utf8'),
+    receiveId: plain.subarray(messageStart + messageLength).toString('utf8'),
+  };
+}

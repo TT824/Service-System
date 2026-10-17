@@ -113,8 +113,27 @@ class FakeOutboxRepository implements OutboxRepository {
       tenantId: record.tenantId,
       messageType: 'text',
       content: '请稍等，我帮您查一下',
+      media: null,
     });
     return record;
+  }
+
+  /**
+   * Replace the seeded message with one that carries provider media.
+   *
+   * Separate from {@link seedOutbox} rather than another override on it, because
+   * a media message is not a variation of the text one: its content is the
+   * platform's placeholder, its type is not `text`, and what a retry has to get
+   * right is the handle beside them.
+   */
+  seedMediaMessage(overrides: { messageType?: OutboxMessage['messageType'] } = {}): void {
+    this.messages.set('message-1', {
+      id: 'message-1',
+      tenantId: TENANT,
+      messageType: overrides.messageType ?? 'image',
+      content: '[图片消息]',
+      media: { mimeType: 'image/png', providerMediaId: 'MEDIA_ID_1' },
+    });
   }
 
   seedDelivery(overrides: Partial<MessageDelivery> = {}): MessageDelivery {
@@ -559,6 +578,45 @@ describe('OutboxProcessor delivery outcomes', () => {
       leaseExpiresAt: null,
       lastFailureCode: null,
     });
+  });
+
+  it('sends a media message with the provider handle read off the message row', async () => {
+    // The one thing a Worker attempt can get wrong that an API attempt cannot:
+    // this process never saw the upload. If the handle is not recovered from the
+    // row, the provider is asked to send an image it was never given, and the
+    // failure surfaces as a provider error about a missing `media_id` rather
+    // than as anything pointing at the query.
+    const repository = new FakeOutboxRepository();
+    repository.seedOutbox();
+    repository.openWindow();
+    repository.seedMediaMessage();
+    const transport = new ScriptedTransport(() => sendOk('wecom-msg-media'));
+    const processor = buildProcessor(repository, transport);
+
+    await processor.runOnce();
+
+    expect(transport.calls).toHaveLength(1);
+    expect(transport.calls[0]).toMatchObject({
+      messageType: 'image',
+      content: '[图片消息]',
+      media: { mediaId: 'MEDIA_ID_1', mimeType: 'image/png' },
+    });
+  });
+
+  it('hands the provider no media for a text message even when the row has a type', async () => {
+    // The mirror of the test above, and the reason `providerMediaOf` answers
+    // `null` rather than sending a half-filled handle: a text row whose media
+    // columns are absent must produce a plain text request, not one carrying an
+    // empty `media_id`.
+    const repository = new FakeOutboxRepository();
+    repository.seedOutbox();
+    repository.openWindow();
+    const transport = new ScriptedTransport(() => sendOk('wecom-msg-text'));
+    const processor = buildProcessor(repository, transport);
+
+    await processor.runOnce();
+
+    expect(transport.calls[0]).toMatchObject({ messageType: 'text', media: null });
   });
 
   it('reschedules a definite retryable failure and gives the reserved slot back', async () => {

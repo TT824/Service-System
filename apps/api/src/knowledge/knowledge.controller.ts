@@ -1,25 +1,22 @@
 import {
   BadRequestException,
   Body,
-  Catch,
   Controller,
   Get,
   HttpCode,
   HttpStatus,
   Param,
   Patch,
-  PayloadTooLargeException,
   Post,
   Query,
   Req,
   UploadedFile,
   UseFilters,
   UseInterceptors,
-  type ArgumentsHost,
-  type ExceptionFilter,
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
-import type { Request, Response } from 'express';
+import type { Request } from 'express';
+import { uploadTooLargeFilter } from '../http/upload-too-large.filter';
 import {
   CATALOG_ATTRIBUTE_VALUE_TYPES,
   FAQ_VARIANT_SOURCES,
@@ -32,7 +29,6 @@ import {
   SKU_STATUSES,
   SPU_SHELF_STATUSES,
   SPU_SOURCE_TYPES,
-  buildApiErrorBody,
   parseProductImportFile,
   type CategoryAttribute,
   type FaqItem,
@@ -66,7 +62,6 @@ import {
   bodyRequiredPositiveInt,
   bodyRequiredString,
 } from '../http/request-body';
-import { requestIdFromResponse } from '../http/request-id-response';
 import { AccessService } from '../platform/access.service';
 import { parseIndexStatusFilter } from './knowledge-index-status-query';
 import { KnowledgeService, type SpuWithSkus } from './knowledge.service';
@@ -119,26 +114,13 @@ const IMPORT_UPLOAD_INTERCEPTOR = FileInterceptor('file', {
 /**
  * 上传超限的 413 收敛回文档化的 400 `bad_request`。
  *
- * multer 的 `limits.fileSize` 触发时抛 `PayloadTooLargeException`（413），而
- * `errorCodeForHttpStatus` 的映射表里没有 413 —— 交给全局过滤器会落进 `default`
- * 分支，产出 `code: "internal_error"` 的 413，一个契约里根本不存在的错误体。
- * 文件太大是调用方的输入问题，必须是 400，所以在这里就拦下来。
+ * 行为在 `../http/upload-too-large.filter.ts` 里写一份，内部会话的附件上传用同一份
+ * —— 两个上传口共用「413 → 400」这条映射，各抄一遍则会在某次只改一处时分叉。
+ * 这里只留这个端点自己的措辞：它的上限是导入商品文件的业务上限。
  */
-@Catch(PayloadTooLargeException)
-class ImportUploadTooLargeFilter implements ExceptionFilter {
-  /** @inheritdoc */
-  catch(_exception: PayloadTooLargeException, host: ArgumentsHost): void {
-    const response = host.switchToHttp().getResponse<Response>();
-    response.status(HttpStatus.BAD_REQUEST).json(
-      buildApiErrorBody({
-        requestId: requestIdFromResponse(response),
-        code: 'bad_request',
-        message: 'Bad Request',
-        details: [`文件超过 ${MAX_PRODUCT_IMPORT_FILE_BYTES} 字节上限`],
-      }),
-    );
-  }
-}
+const ImportUploadTooLargeFilter = uploadTooLargeFilter(
+  `文件超过 ${MAX_PRODUCT_IMPORT_FILE_BYTES} 字节上限`,
+);
 
 /**
  * 定导入文件的格式：显式 `format` 优先，否则按文件名后缀推断。

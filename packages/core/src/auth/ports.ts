@@ -285,10 +285,34 @@ export type SessionRepository = {
   listSessionsForDevice(deviceId: string): Promise<ReadonlyArray<AuthSession>>;
 };
 
+/**
+ * The picture behind a set of members.
+ *
+ * An avatar belongs to an account, and an account reaches a member through an
+ * active link — so "what does this colleague look like" is a join between two
+ * things this port already holds. It is a bulk read because the caller asks for
+ * a whole directory at once: a console that has to name ten colleagues should
+ * not make twenty round trips to draw ten faces.
+ *
+ * A member with no account, no active link, or no picture is simply absent from
+ * the map. Having no avatar is not a failure, and a caller renders the initial
+ * it would have rendered before this existed.
+ */
+export type MemberAvatarDirectory = {
+  /**
+   * The avatars of the named members, keyed by member id.
+   *
+   * @param memberIds - The members to look up.
+   * @returns The avatars found, as base64 `data:` URLs.
+   */
+  listMemberAvatars(memberIds: ReadonlyArray<string>): Promise<ReadonlyMap<string, string>>;
+};
+
 /** Complete authentication storage port. */
 export type AuthRepository = DirectoryRepository &
   IdentityRepository &
   MembershipRepository &
+  MemberAvatarDirectory &
   TrialProvisioningRepository &
   SessionRepository;
 

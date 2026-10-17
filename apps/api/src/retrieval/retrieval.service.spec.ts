@@ -376,3 +376,80 @@ describe('RetrievalService intent and retrieval-first', () => {
     expect(write?.candidates[0]?.sourceId).toBe(PRODUCT.id);
   });
 });
+
+/**
+ * What travels with the question, and where the window stops.
+ *
+ * The provider is the assertion again, for the reason it is everywhere in this
+ * file: the history exists only to be forwarded, so what it was forwarded is the
+ * whole subject.
+ */
+describe('RetrievalService generation history', () => {
+  it('sends the ten messages before the question, oldest first, and never the question itself', async () => {
+    const earlier = Array.from({ length: 14 }, (_, index) =>
+      message(index % 2 === 0 ? 'inbound' : 'outbound', `第 ${index + 1} 句`),
+    );
+    const { service, recorded } = serviceOver([...earlier, message('inbound', '这个多少钱')], {
+      providerCandidates: [{ sourceId: PRODUCT.id, content: '亲，129 元～' }],
+    });
+
+    await service.suggest(TENANT, MEMBER, { conversationId: CONVERSATION_ID });
+
+    const asked = recorded.asked[0];
+    expect(asked?.query).toBe('这个多少钱');
+    const history = asked?.history ?? [];
+    // Ten, not fifteen: the window is the last ten *before* the question.
+    expect(history).toHaveLength(10);
+    expect(history[0]?.content).toBe('第 5 句');
+    expect(history.at(-1)?.content).toBe('第 14 句');
+    // Chronological, with the two sides of the counter told apart — an agent's
+    // line handed over as the model's own turn would read as a conversation it
+    // is in the middle of.
+    expect(history.map((turn) => turn.role)).toEqual([
+      'customer',
+      'agent',
+      'customer',
+      'agent',
+      'customer',
+      'agent',
+      'customer',
+      'agent',
+      'customer',
+      'agent',
+    ]);
+    // Not in the history a second time: it is already the question, and a copy
+    // in the transcript would read as something the agent has answered.
+    expect(history.map((turn) => turn.content)).not.toContain('这个多少钱');
+  });
+
+  it('treats the whole transcript as history when the caller supplies the question', async () => {
+    const { service, recorded } = serviceOver([message('inbound', '先前那句')], {
+      providerCandidates: [{ sourceId: PRODUCT.id, content: '亲，129 元～' }],
+    });
+
+    await service.suggest(TENANT, MEMBER, {
+      conversationId: CONVERSATION_ID,
+      query: '手写的这句',
+    });
+
+    const asked = recorded.asked[0];
+    expect(asked?.query).toBe('手写的这句');
+    // A supplied question did not come out of the transcript, so nothing in the
+    // transcript is excluded by it.
+    expect(asked?.history).toEqual([{ role: 'customer', content: '先前那句' }]);
+  });
+
+  it('keeps a placeholder in the history — it is what the next question points at', async () => {
+    const { service, recorded } = serviceOver(
+      [message('inbound', '[图片消息]'), message('inbound', '这个多少钱')],
+      { providerCandidates: [{ sourceId: PRODUCT.id, content: '亲，129 元～' }] },
+    );
+
+    await service.suggest(TENANT, MEMBER, { conversationId: CONVERSATION_ID });
+
+    // The same text is refused as the *question* (nobody may answer a picture)
+    // and kept as context: the sentence after it says 「这个」 about it, and
+    // dropping the picture would delete the antecedent and leave the pronoun.
+    expect(recorded.asked[0]?.history).toEqual([{ role: 'customer', content: '[图片消息]' }]);
+  });
+});

@@ -145,6 +145,23 @@ export type SaveOutboxStateInput = {
   readonly now: string;
 };
 
+/** Data used to take the send lease of one pending outbox entry. */
+export type ClaimOutboxForSendInput = {
+  readonly tenantId: string;
+  readonly outboxId: string;
+  /** Opaque holder name, stored so a live claim can be told from a lapsed one. */
+  readonly owner: string;
+  readonly now: string;
+  readonly leaseMs: number;
+};
+
+/** Data used to give a send lease back before any provider attempt was made. */
+export type ReleaseOutboxClaimInput = {
+  readonly tenantId: string;
+  readonly outboxId: string;
+  readonly now: string;
+};
+
 /** Data used to target one customer's reply window. */
 export type QuotaWindowKey = {
   readonly tenantId: string;
@@ -243,6 +260,29 @@ export interface ChannelReliabilityRepository {
 
   /** Enqueue the outbox entry for a delivery; idempotent by `deliveryId`. */
   enqueueOutbox(input: EnqueueOutboxInput): Promise<ChannelOutboxRecord>;
+  /**
+   * Take the send lease of a pending outbox entry, or report that someone else
+   * already holds it.
+   *
+   * The API sends a reply inline instead of waiting for the Worker, so it has to
+   * hold the lease the Worker's own claim takes. Without it the entry sits
+   * `pending` and lease-free for the whole provider round trip, and the Worker's
+   * poll — which takes exactly that state — can claim the same entry and send
+   * the message a second time.
+   *
+   * @returns The entry now leased by the caller, or `undefined` when it is not
+   *   `pending` any more or another holder's lease has not lapsed.
+   */
+  claimOutboxForSend(input: ClaimOutboxForSendInput): Promise<ChannelOutboxRecord | undefined>;
+  /**
+   * Give a send lease back without changing the entry's state or attempt count.
+   *
+   * For refusals that happen before anything reaches the adapter — a closed
+   * reply window, no budget left — which must not leave the entry leased until
+   * the lease expires: the retry they exist to allow would then be delayed by a
+   * full lease for no reason.
+   */
+  releaseOutboxClaim(input: ReleaseOutboxClaimInput): Promise<void>;
   /** Move an outbox entry to its next state. */
   saveOutboxState(input: SaveOutboxStateInput): Promise<ChannelOutboxRecord>;
   /** The outbox entry of one delivery, if the delivery was ever queued. */

@@ -95,3 +95,49 @@ export const MEDIA_STORAGE = Symbol('MEDIA_STORAGE');
 export function mediaObjectKey(tenantId: string, messageId: string): string {
   return `tenants/${tenantId}/messages/${messageId}`;
 }
+
+/**
+ * The key one internal attachment's bytes are stored under.
+ *
+ * A sibling of {@link mediaObjectKey} rather than a second parameter on it, and
+ * a separate segment, because the two namespaces answer different questions.
+ * A customer message's media is fetched *from* a provider during ingest and is
+ * keyed by the message it belongs to; an internal attachment is uploaded *by* a
+ * colleague and is keyed by the attachment, which exists before any message
+ * names it. Keying both by message id would make an unsent draft unaddressable
+ * — there would be no message id to build the key from.
+ *
+ * The tenant still comes first, so a tenant's objects remain enumerable and
+ * deletable as a set, which is what an offboarding actually needs.
+ *
+ * @param tenantId - The tenant the uploader belongs to.
+ * @param attachmentId - The platform's id for the attachment.
+ * @returns The object key.
+ */
+export function internalAttachmentObjectKey(tenantId: string, attachmentId: string): string {
+  return `tenants/${tenantId}/internal-attachments/${attachmentId}`;
+}
+
+/**
+ * The key the platform's own copy of an outbound file is stored under.
+ *
+ * Keyed by a generated media id rather than by the message, because the bytes
+ * are written *before* the message exists: the provider has to be handed the
+ * file first — it will not accept a message naming a `media_id` it was never
+ * given — and only then is the row that records both written. A key built from
+ * the message id would have nothing to be built from at that moment.
+ *
+ * Third namespace of its own for the reason `0020`'s is a namespace of its own:
+ * what these three hold is three different things. A customer message's media is
+ * a copy of what the provider sent us; an internal attachment is a colleague's
+ * file that will never leave the platform; this is a seat's file that has
+ * *already* left for the customer and is kept here only so the transcript can
+ * still show what was said.
+ *
+ * @param tenantId - The tenant whose seat uploaded the file.
+ * @param mediaId - The platform's id for this upload.
+ * @returns The object key.
+ */
+export function outboundMediaObjectKey(tenantId: string, mediaId: string): string {
+  return `tenants/${tenantId}/outbound-media/${mediaId}`;
+}

@@ -64,6 +64,9 @@ test('workspace uses real candidates, traces adoption, transfers with version, a
     await tick(); await tick();
     assert.match(w.document.getElementById('candidates').textContent, /48 小时内发出/);
     assert.match(w.document.getElementById('candidates').textContent, /未配置生成模型/);
+    // 顶部指标：接了后端就不该再拿会话列表凑一个「今日接待」——原来那个过滤条件
+    // （time !== '昨天'）对 HH:MM 的后端时间恒为真，数出来等于会话总数，是假数值。
+    assert.equal(w.document.getElementById('today-served').textContent, '—');
     w.document.querySelector('.use-btn').click();
     w.document.getElementById('reply').value += '，请稍等';
     w.document.getElementById('send-btn').click(); await tick();

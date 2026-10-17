@@ -20,6 +20,7 @@ export {
 export type {
   ConversationOpenedEvent,
   ConversationUpdatedEvent,
+  InternalMessageCreatedEvent,
   MessageCreatedEvent,
   MessageDeliveryUpdatedEvent,
   PresenceChangedEvent,

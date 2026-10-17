@@ -325,6 +325,33 @@ export class PostgresAuthRepository implements AuthRepository {
     );
   }
 
+  /** @inheritdoc */
+  async listMemberAvatars(
+    memberIds: ReadonlyArray<string>,
+  ): Promise<ReadonlyMap<string, string>> {
+    if (memberIds.length === 0) {
+      // A statement with an empty array still costs a round trip, and `= ANY('{}')`
+      // is never true — so the empty answer is the same one, for free.
+      return new Map();
+    }
+    // One statement for the whole directory, because the alternative is a join
+    // per colleague. Only active links count (a revoked one is a person who used
+    // to be this member), and `u.avatar_url IS NOT NULL` is left to the database
+    // so a member without a picture costs nothing to answer.
+    const rows = await this.query(
+      `SELECT l.member_id, u.avatar_url
+         FROM member_user_links l
+         JOIN user_accounts u ON u.id = l.user_id
+        WHERE l.member_id = ANY($1::text[])
+          AND l.revoked_at IS NULL
+          AND u.avatar_url IS NOT NULL`,
+      [memberIds],
+    );
+    return new Map(
+      rows.map((row) => [String(row['member_id']), String(row['avatar_url'])]),
+    );
+  }
+
   // --------------------------------------------------------------------------
   // Trial workspace
   // --------------------------------------------------------------------------

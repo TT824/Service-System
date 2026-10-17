@@ -930,4 +930,106 @@ describe('directory upserts', () => {
       false,
     );
   });
+
+  it('records a file a seat sent with the message that names it', () => {
+    const store = new KefuStore();
+    const sent = store.sendOutbound({
+      tenantId: T1,
+      storeId: 'store-acme-flagship',
+      conversationId: 'conversation-acme-1',
+      content: '报价单-2026-10.xlsx',
+      source: 'manual_typed',
+      messageType: 'file',
+      media: {
+        key: 'tenants/tenant-acme/outbound-media/file-1.xlsx',
+        mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        bytes: 20480,
+        name: '报价单-2026-10.xlsx',
+        providerMediaId: 'WECOM_MEDIA_ID_1',
+      },
+      now: NOW,
+    });
+    // The kind is on the message, not on the media: a picture the customer sent
+    // and a picture a seat sent are the same kind of message.
+    expect(sent.message.messageType).toBe('file');
+    expect(sent.message.media).toEqual({
+      key: 'tenants/tenant-acme/outbound-media/file-1.xlsx',
+      mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      bytes: 20480,
+      name: '报价单-2026-10.xlsx',
+      providerMediaId: 'WECOM_MEDIA_ID_1',
+    });
+  });
+
+  it('normalizes what an outbound picture does not have to two absences, not undefined', () => {
+    const store = new KefuStore();
+    const sent = store.sendOutbound({
+      tenantId: T1,
+      storeId: 'store-acme-flagship',
+      conversationId: 'conversation-acme-1',
+      content: '[图片]',
+      source: 'manual_typed',
+      messageType: 'image',
+      media: { key: 'tenants/tenant-acme/outbound-media/image-1.png', mimeType: 'image/png', bytes: 1024 },
+      now: NOW,
+    });
+    // No reader should have to tell `undefined` from "there is none".
+    expect(sent.message.media?.name).toBeNull();
+    expect(sent.message.media?.providerMediaId).toBeNull();
+  });
+
+  it('refuses a media message with no media, and a text message with some', () => {
+    const store = new KefuStore();
+    const base = {
+      tenantId: T1,
+      storeId: 'store-acme-flagship',
+      conversationId: 'conversation-acme-1',
+      content: '内容',
+      source: 'manual_typed' as const,
+      now: NOW,
+    };
+    const media = { key: 'k', mimeType: 'image/png', bytes: 10 };
+    // Both are caller mistakes rather than states a customer can produce, so
+    // they are thrown on rather than stored as a row nothing can draw.
+    expect(() => store.sendOutbound({ ...base, messageType: 'image' })).toThrow(/with no media/);
+    expect(() => store.sendOutbound({ ...base, messageType: 'video', media: null })).toThrow(
+      /with no media/,
+    );
+    expect(() => store.sendOutbound({ ...base, media })).toThrow(/text message with media/);
+    expect(() => store.sendOutbound({ ...base, messageType: 'link', media })).toThrow(
+      /link message with media/,
+    );
+  });
+
+  it('leaves an inbound picture unnamed, because nothing named it', () => {
+    const store = new KefuStore();
+    const ingested = store.ingestInbound({
+      tenantId: T1,
+      storeId: 'store-acme-flagship',
+      channel: 'wecom',
+      externalCustomerId: 'customer-media-1',
+      externalConversationId: 'wecom-ext-media-1',
+      messageType: 'image',
+      content: '[图片消息]',
+      dedupKey: 'media:1',
+      now: NOW,
+    });
+    expect(
+      store.attachMessageMedia({
+        tenantId: T1,
+        messageId: ingested.message.id,
+        key: `tenants/${T1}/media/${ingested.message.id}`,
+        mimeType: 'image/jpeg',
+        bytes: 4096,
+      }),
+    ).toBe(true);
+    const stored = store.getMessage(T1, ingested.message.id);
+    expect(stored?.media).toEqual({
+      key: `tenants/${T1}/media/${ingested.message.id}`,
+      mimeType: 'image/jpeg',
+      bytes: 4096,
+      name: null,
+      providerMediaId: null,
+    });
+  });
 });

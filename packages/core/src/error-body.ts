@@ -22,6 +22,15 @@ export type ApiErrorCode =
   | 'service_unavailable'
   | 'gateway_timeout'
   | 'config_error'
+  /**
+   * The account is temporarily locked after too many failed sign-ins.
+   *
+   * Its own code rather than `unauthorized` because the caller's next move is
+   * different: waiting is the fix, and retrying with the *correct* password is
+   * exactly what fails. Collapsing it onto `unauthorized` is how an operator
+   * concludes their password — or their account — is broken.
+   */
+  | 'account_locked'
   | 'channel_disabled'
   /**
    * The channel exists but is not configured for this deployment.

@@ -797,21 +797,28 @@ export class RealWecomAdapter implements ChannelAdapter, WecomRealTransport {
    *
    * The tenant and store are the caller's scope, not the provider's: WeCom
    * identifies an account by credential, so they are not part of the request.
-   * The upload itself — endpoint, `type=image`, multipart field, payload bounds,
-   * the single replay after an authentication failure and the stable failure
-   * mapping — lives in `@kefu/wecom`'s `WecomMediaUploader`, which uses the same
-   * HTTP port and token provider as {@link sendMessage}.
+   * The upload itself — endpoint, the `type` the kind selects, multipart field,
+   * payload bounds, the single replay after an authentication failure and the
+   * stable failure mapping — lives in `@kefu/wecom`'s `WecomMediaUploader`,
+   * which uses the same HTTP port and token provider as {@link sendMessage}.
    *
-   * @param input - Tenant/store scope the upload is made for, and the image.
+   * @param input - Tenant/store scope the upload is made for, and the payload.
    * @returns The provider media id, or a stable failure.
    */
   async uploadMedia(input: {
     readonly tenantId: string;
     readonly storeId: string;
+    readonly kind: Extract<MessageType, 'image' | 'video' | 'file'>;
     readonly mimeType: string;
     readonly bytes: Uint8Array;
+    readonly fileName?: string;
   }): Promise<ChannelResult<{ readonly mediaId: string }>> {
-    return this.#media.uploadMedia({ mimeType: input.mimeType, bytes: input.bytes });
+    return this.#media.uploadMedia({
+      kind: input.kind,
+      mimeType: input.mimeType,
+      bytes: input.bytes,
+      ...(input.fileName === undefined ? {} : { fileName: input.fileName }),
+    });
   }
 
   // --------------------------------------------------------------------------

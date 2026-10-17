@@ -391,7 +391,9 @@ describe('Realtime (interface)', () => {
         content: input.content,
         occurredAt: new Date().toISOString(),
       })
-      .expect(201);
+      // `200`, not the Nest default `201`: WeCom reads only `200` as "received"
+      // and retries anything else, so the callback routes declare it explicitly.
+      .expect(200);
     return (
       response.body as {
         data: {

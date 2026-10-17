@@ -39,21 +39,26 @@
 import { createHash } from 'node:crypto';
 import { HttpStatus, Inject, Injectable } from '@nestjs/common';
 import {
+  CHANNEL_OUTBOX_LEASE_MS,
   deliveryStatusForFailure,
   describeReplyWindow,
   evaluateDeliveryWindow,
   type ChannelAdapter,
   type ChannelFailureCode,
   type ChannelOutboxRecord,
+  type ChannelResult,
   type Conversation,
   type DeliveryAttempt,
+  type DeliveryFailureCode,
   type Member,
   type Message,
   type MessageDelivery,
   type MessageStatusEvent,
   type MessageType,
+  providerMediaOf,
   type ReplyWindowStatus,
   type UnifiedMessage,
+  type UploadMediaResult,
 } from '@kefu/core';
 import { PLATFORM_REPOSITORY, type PlatformRepository } from '../platform/platform-repository';
 import { RealtimeService } from '../realtime/realtime.service';
@@ -78,6 +83,16 @@ const MAX_REASON_LENGTH = 200;
 
 /** Delivery statuses a provider status callback may report. */
 const CALLBACK_STATUSES: ReadonlyArray<MessageDelivery['status']> = ['sent', 'failed', 'unknown'];
+
+/**
+ * Lease holder name of this process's inline send.
+ *
+ * The Worker and this API claim the same outbox entries from the same table, so
+ * the holder is recorded rather than implied: an operator reading a stuck entry
+ * can tell which process took it, and the name is the one thing the two senders
+ * differ in.
+ */
+const INLINE_SEND_LEASE_OWNER = 'api-inline-send';
 
 /** Input accepted by {@link ChannelDeliveryService.ingestWebhook}. */
 export type IngestWebhookInput = {
@@ -541,6 +556,43 @@ export class ChannelDeliveryService {
   // --------------------------------------------------------------------------
 
   /**
+   * Hand one file a seat picked to the provider, and answer with its handle.
+   *
+   * Separate from {@link dispatch} because it happens at a different moment and
+   * for a different reason: it runs *before* the message exists, because the
+   * provider will not accept a message naming a `media_id` it was never given.
+   * The upload comes first, the row that records the handle comes second, and
+   * that order is the whole shape of sending a file to a customer.
+   *
+   * Nothing is retried here. A failed upload is answered to the seat who is
+   * still sitting in front of the picker — that is a better answer than a
+   * message that appears to have been sent and is quietly waiting for a worker
+   * to try again — so the outcome is returned rather than swallowed, and the
+   * caller decides what the seat is told.
+   *
+   * @param input - The tenant and store the file is sent from, the kind the
+   *   provider must be told, and the bytes under the seat's own file name.
+   * @returns The provider's handle for the uploaded copy, or a stable refusal.
+   */
+  async uploadMedia(input: {
+    readonly tenantId: string;
+    readonly storeId: string;
+    readonly kind: Extract<MessageType, 'image' | 'video' | 'file'>;
+    readonly mimeType: string;
+    readonly bytes: Uint8Array;
+    readonly fileName?: string;
+  }): Promise<ChannelResult<UploadMediaResult>> {
+    return this.adapter.uploadMedia({
+      tenantId: input.tenantId,
+      storeId: input.storeId,
+      kind: input.kind,
+      mimeType: input.mimeType,
+      bytes: input.bytes,
+      ...(input.fileName === undefined ? {} : { fileName: input.fileName }),
+    });
+  }
+
+  /**
    * Record and dispatch the delivery of one logical outbound message.
    *
    * Called after the platform message is durable, so a delivery always has a
@@ -802,14 +854,23 @@ export class ChannelDeliveryService {
   /**
    * Run one provider attempt and move the delivery to its resulting state.
    *
-   * The reply-window/quota gate runs *before* the adapter is called, so a
+   * The outbox entry is claimed *first*. This call sends inline instead of
+   * waiting for the Worker, and an entry that is still `pending` and lease-free
+   * is exactly what the Worker's poll takes — so without holding the lease for
+   * the duration of the provider round trip, the same reply could be sent twice
+   * and the customer would receive two copies. Winning the claim is what makes
+   * this the only sender of this entry; losing it means the Worker owns the
+   * send, and this call leaves the delivery to it rather than racing.
+   *
+   * The reply-window/quota gate then runs *before* the adapter is called, so a
    * message that is not allowed to be sent can never reach a real customer. A
    * definite failure releases the reserved slot; an unknown outcome keeps it,
    * because the provider may have accepted the message after all.
    *
    * A refused or failed attempt leaves the outbox entry `pending`, which is what
    * lets a later retry reuse the same delivery and the same outbox entry instead
-   * of creating new ones.
+   * of creating new ones. The lease is given back with that state, so the retry
+   * does not have to wait for a claim nobody holds any more to lapse.
    */
   private async attemptDelivery(
     delivery: MessageDelivery,
@@ -817,26 +878,33 @@ export class ChannelDeliveryService {
     message: Message,
     now: string,
   ): Promise<MessageDelivery> {
+    const claim = await this.reliability.claimOutboxForSend({
+      tenantId: delivery.tenantId,
+      outboxId: outbox.id,
+      owner: INLINE_SEND_LEASE_OWNER,
+      now,
+      leaseMs: CHANNEL_OUTBOX_LEASE_MS,
+    });
+    if (claim === undefined) {
+      // Another sender — the Worker — holds this entry, or it is no longer
+      // pending. Sending here as well is precisely the duplicate this claim
+      // exists to prevent, so the delivery is reported as it stands.
+      return delivery;
+    }
     const key = this.windowKey(delivery.tenantId, delivery.storeId, delivery.externalCustomerId);
     const decision = evaluateDeliveryWindow(await this.reliability.getQuotaWindow(key), now);
     if (!decision.allowed) {
-      return this.reliability.recordDegradation({
-        tenantId: delivery.tenantId,
-        deliveryId: delivery.id,
-        failureCode: decision.code,
-        failureReason: decision.reason,
-        retryable: true,
+      return this.#refuseBeforeProvider(delivery, outbox, {
+        code: decision.code,
+        reason: decision.reason,
         now,
       });
     }
     const reservation = await this.reliability.reserveQuotaSlot(key, now);
     if (!reservation.ok) {
-      return this.reliability.recordDegradation({
-        tenantId: delivery.tenantId,
-        deliveryId: delivery.id,
-        failureCode: reservation.code,
-        failureReason: reservation.reason,
-        retryable: true,
+      return this.#refuseBeforeProvider(delivery, outbox, {
+        code: reservation.code,
+        reason: reservation.reason,
         now,
       });
     }
@@ -876,6 +944,40 @@ export class ChannelDeliveryService {
     return recorded.delivery;
   }
 
+  /**
+   * Refuse a delivery before any provider attempt, giving the send lease back.
+   *
+   * A refusal happens before anything reached the adapter, so the entry has made
+   * no attempt: it stays `pending` with its attempt count unchanged, and the
+   * lease is released with it. Holding the lease until it lapsed would be
+   * harmless but pointless — the refusal exists to make the delivery retryable,
+   * and a retry that has to wait out a lease nobody holds is not.
+   *
+   * @param delivery - Delivery being refused.
+   * @param outbox - Its outbox entry, currently leased by this call.
+   * @param refusal - Provider-authored failure code and reason, plus the instant.
+   * @returns The delivery in its degraded state.
+   */
+  async #refuseBeforeProvider(
+    delivery: MessageDelivery,
+    outbox: ChannelOutboxRecord,
+    refusal: { readonly code: DeliveryFailureCode; readonly reason: string; readonly now: string },
+  ): Promise<MessageDelivery> {
+    await this.reliability.releaseOutboxClaim({
+      tenantId: delivery.tenantId,
+      outboxId: outbox.id,
+      now: refusal.now,
+    });
+    return this.reliability.recordDegradation({
+      tenantId: delivery.tenantId,
+      deliveryId: delivery.id,
+      failureCode: refusal.code,
+      failureReason: refusal.reason,
+      retryable: true,
+      now: refusal.now,
+    });
+  }
+
   /** Hand one message to the adapter, classifying every possible outcome. */
   private async sendToProvider(delivery: MessageDelivery, message: Message): Promise<SendOutcome> {
     try {
@@ -886,7 +988,7 @@ export class ChannelDeliveryService {
         externalConversationId: delivery.externalConversationId,
         messageType: message.messageType,
         content: message.content,
-        media: null,
+        media: providerMediaOf(message),
         correlationId: delivery.id,
       });
       if (result.ok) {

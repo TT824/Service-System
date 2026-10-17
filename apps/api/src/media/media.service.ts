@@ -224,7 +224,10 @@ export class MessageMediaService {
     readonly messageId: string;
   }): Promise<MessageMedia | null> {
     const message = await this.platform.getMessage(input.tenantId, input.messageId);
-    return message?.media ?? null;
+    if (message === undefined) {
+      return null;
+    }
+    return message.media;
   }
 }
 

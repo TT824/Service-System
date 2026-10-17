@@ -344,8 +344,15 @@ export class PostgresOutboxRepository implements OutboxRepository {
 
   /** @inheritdoc */
   async getMessage(tenantId: string, messageId: string): Promise<OutboxMessage | undefined> {
+    // The two media columns are read for the same reason `content` is: the
+    // outbox entry stores no payload, so a retry that has to send a picture
+    // recovers the provider's handle from the message row or not at all. On a
+    // database migrated only up to `0013` the columns do not exist and this
+    // query fails loudly, which is the honest answer — a worker that cannot
+    // read a message cannot deliver one, and silently sending text where a
+    // document was recorded is worse than not sending.
     const rows = await this.database.rows(
-      `SELECT id, tenant_id, message_type, content FROM messages
+      `SELECT id, tenant_id, message_type, content, media_mime, provider_media_id FROM messages
         WHERE tenant_id = $1 AND id = $2`,
       [tenantId, messageId],
     );
@@ -358,6 +365,10 @@ export class PostgresOutboxRepository implements OutboxRepository {
       tenantId: toText(row['tenant_id']),
       messageType: toMessageType(row['message_type']),
       content: toText(row['content']),
+      media: {
+        mimeType: toTextOrNull(row['media_mime']),
+        providerMediaId: toTextOrNull(row['provider_media_id']),
+      },
     };
   }
 

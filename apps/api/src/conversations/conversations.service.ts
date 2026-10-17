@@ -1,7 +1,10 @@
+import { randomUUID } from 'node:crypto';
 import {
   BadRequestException,
   ConflictException,
   ForbiddenException,
+  HttpException,
+  HttpStatus,
   Inject,
   Injectable,
   NotFoundException,
@@ -10,17 +13,20 @@ import {
   CONTENT_SAFETY_RULES,
   MESSAGE_SOURCES,
   assignmentAudience,
+  channelMessagePlaceholder,
   describeBlockedContent,
   effectiveAvailabilityStatus,
   firstResponseDurationMs,
   isAdministratorRole,
   maySendToConversation,
   mayTakeOverClaim,
+  outboundMedia,
   screenContent,
   transferTargetRefusal,
   type AgentAvailabilityStatus,
   type AssignmentCandidate,
   type AssignmentReasonCode,
+  type ChannelFailureCode,
   type ContentSafetyRule,
   type Conversation,
   type ConversationAssignment,
@@ -28,6 +34,7 @@ import {
   type Member,
   type Message,
   type MessageSource,
+  type OutboundMediaKind,
   type ReplyWindowStatus,
   type StoreConversationResult,
   type TakeoverAuthority,
@@ -37,7 +44,14 @@ import {
   type DeliveryDetail,
   type DispatchedMessage,
 } from '../channels/channel-delivery.service';
+import { channelFailureFromAdapter } from '../channels/channel-outcome';
+import { decodedFileName } from '../http/uploaded-file-name';
 import { IdentityService } from '../identity/identity.service';
+import {
+  MEDIA_STORAGE,
+  outboundMediaObjectKey,
+  type MediaStorage,
+} from '../media/media-storage';
 import { MediaUrlService } from '../media/media-url.service';
 import { AccessService } from '../platform/access.service';
 import {
@@ -140,6 +154,42 @@ export type SendMessageRequest = {
 };
 
 /**
+ * One file a seat picked and is sending, as the request carried it.
+ *
+ * Only the fields the endpoint reads off multer's file object; the rest of what
+ * multer fills in is not a fact this service is allowed to trust. There is no
+ * caption field on purpose: the channel's image and file messages carry no text
+ * beside them, so accepting one would mean storing words that never reach the
+ * customer.
+ */
+export type SendMediaRequest = {
+  readonly file: UploadedOutboundMediaFile;
+  readonly source: MessageSource;
+  readonly dedupKey?: string;
+};
+
+/**
+ * The fields this route uses off multer's file object.
+ *
+ * Declared here rather than pulled from `@types/multer`, for the reason the
+ * internal-chat upload declares its own: one shape is not worth depending on,
+ * and this is the shape the endpoint actually reads — the rest of what multer
+ * fills in is not a fact this service is allowed to trust.
+ *
+ * `buffer` and not a stream, because the bytes are needed in full twice: once
+ * for the platform's own copy and once for the provider's. A stream would let
+ * the first reader consume what the second still needs, and multer's memory
+ * storage is what makes both reads possible under the upload route's own size
+ * backstop.
+ */
+export type UploadedOutboundMediaFile = {
+  readonly originalname: string;
+  readonly mimetype: string;
+  readonly size: number;
+  readonly buffer: Buffer;
+};
+
+/**
  * One conversation waiting in the pool, with the two clocks a seat needs.
  *
  * `waitingMs` is this round's wait, so it resets when a conversation returns to
@@ -203,6 +253,16 @@ export class ConversationsService {
     @Inject(CONTENT_SAFETY_RULES) private readonly safetyRules: ReadonlyArray<ContentSafetyRule>,
     /** Signs the URLs a transcript's stored images are read from. */
     private readonly mediaUrls: MediaUrlService,
+    /**
+     * Where the platform's own copy of a seat's file is kept.
+     *
+     * A copy, not the original: the file has already gone to the customer by the
+     * time the row exists, and this one is only so the transcript can still show
+     * what was said a week later. The internal-chat module writes to the same
+     * store for the opposite reason — there, the platform's copy *is* the only
+     * copy.
+     */
+    @Inject(MEDIA_STORAGE) private readonly storage: MediaStorage,
   ) {}
   async list(
     tenantId: string,
@@ -632,17 +692,7 @@ export class ConversationsService {
     member: Member,
     input: SendMessageRequest,
   ): Promise<DispatchedMessage> {
-    const conversation = await this.requireConversation(tenantId, conversationId, member);
-    // 「已结束」先答，因为它是一条关于会话的事实，和谁在问无关——换句话说，
-    // 这个读者本来就读得到这条已结束的会话（结束的会话没有受理人）。
-    if (conversation.status === 'closed') {
-      throw new ConflictException('cannot send an outbound message to a closed conversation');
-    }
-    // 然后是「这单是不是你的」：同事的会话不是可以插话的群聊，转交出去之后原受理人
-    // 也已经说完了。池子里的单没人接走，这条对它不成立（见 core 的判据）。
-    if (!maySendToConversation({ conversation, memberId: member.id })) {
-      throw new ForbiddenException('only the assigned seat may reply to this conversation');
-    }
+    const conversation = await this.replyTarget(tenantId, conversationId, member);
     if (!MESSAGE_SOURCES.includes(input.source)) {
       throw new BadRequestException(`source must be one of ${MESSAGE_SOURCES.join(', ')}`);
     }
@@ -696,20 +746,222 @@ export class ConversationsService {
       }
       return dispatched;
     } catch (error) {
-      // A durable adapter re-validates the conversation inside its own
-      // transaction, so a conversation that closed between the check above and
-      // the write is refused there. Report it with the same status this method
-      // would have produced, not as an internal error.
-      if (error instanceof PlatformWriteError) {
-        switch (error.code) {
-          case 'not_found':
-            throw new NotFoundException('conversation not found in tenant scope');
-          case 'invalid_state':
-            throw new ConflictException('cannot send an outbound message to a closed conversation');
-        }
-      }
-      throw error;
+      this.throwWriteRefusal(error);
     }
+  }
+
+  /**
+   * Send a customer a picture, a clip or a document.
+   *
+   * The same authorization, the same safety gate and the same announcement as
+   * {@link sendMessage}, because a file is not a second kind of permission: it
+   * is the same act with something attached. What differs is the order, and the
+   * order is the whole of this method.
+   *
+   * The provider will not accept a message naming a `media_id` it was never
+   * given, so the upload has to happen *before* the message exists — and the
+   * provider's copy is temporary, so it cannot happen long before. Everything is
+   * therefore done inside this one request: validate, keep our own copy of the
+   * bytes, hand the provider its copy, and only then write the row that names
+   * both. By the time a message saying "this is a document" exists, both copies
+   * are real; there is no interval in which the transcript promises a file
+   * nobody has.
+   *
+   * Nothing here is retried. A failed upload is answered to the seat who is
+   * still looking at the picker, which is a better answer than a bubble that
+   * appears to have been sent and is quietly waiting on a worker.
+   *
+   * @param tenantId - Effective tenant scope.
+   * @param conversationId - The conversation being replied to.
+   * @param member - The acting seat, already authorized.
+   * @param input - The file as multer handed it over, and the message source.
+   * @returns The recorded message and its delivery projection, exactly as a text
+   *   send answers.
+   * @throws {NotFoundException} When the conversation is not in this tenant.
+   * @throws {ForbiddenException} When the seat is not the one handling it.
+   * @throws {ConflictException} When the conversation is closed.
+   * @throws {BadRequestException} When the file is unusable, or its name is
+   *   blocked by the banned-phrase library.
+   * @throws {HttpException} `503` when object storage refuses the write, `502`
+   *   when the provider refuses the upload.
+   */
+  async sendMediaMessage(
+    tenantId: string,
+    conversationId: string,
+    member: Member,
+    input: SendMediaRequest,
+  ): Promise<DispatchedMessage> {
+    const conversation = await this.replyTarget(tenantId, conversationId, member);
+
+    // The one gate on what may be sent, and it runs before anything leaves this
+    // process. The body of the thrown error is an array because that is the only
+    // shape `AllExceptionsFilter` forwards: a plain string here reaches the seat
+    // as "Bad Request" and nothing else, and "文件太大" is the whole of what the
+    // seat needs to know.
+    let file: ReturnType<typeof outboundMedia>;
+    try {
+      file = outboundMedia({
+        // Decoded before it is cleaned, because multer hands over busboy's
+        // latin1 reading of a UTF-8 header: without this a document reaches the
+        // customer named `æ¥ä»·å.pdf`. The name is also what the *content*
+        // of a document message becomes, so an undecoded name is stored, shown
+        // and sent as noise.
+        fileName: decodedFileName(input.file.originalname),
+        mimeType: input.file.mimetype,
+        byteSize: input.file.size,
+      });
+    } catch (error) {
+      throw new BadRequestException([
+        error instanceof Error ? error.message : 'the file cannot be sent',
+      ]);
+    }
+
+    // What the bubble says. A document's name is most of the message and is what
+    // the customer sees on it, so it *is* the content; a picture's name is noise
+    // nobody needs to read, and `[图片]` is what the transcript falls back to if
+    // the media cannot be shown at all.
+    const content = mediaMessageContent(file.kind, file.fileName);
+    const verdict = screenContent(content, this.safetyRules);
+    if (verdict.blocked) {
+      throw new BadRequestException({ message: [describeBlockedContent(verdict)] });
+    }
+
+    // Our copy first. An object nothing references is recoverable — the bucket's
+    // key namespace enumerates it — while a row pointing at bytes that were
+    // never written is not, and this is the same order the internal-chat upload
+    // takes for the same reason.
+    const mediaId = `outbound-media-${randomUUID()}`;
+    const objectKey = outboundMediaObjectKey(tenantId, mediaId);
+    const stored = await this.storage.put({
+      key: objectKey,
+      mimeType: file.mimeType,
+      bytes: input.file.buffer,
+    });
+    if (!stored.ok) {
+      throw new HttpException(
+        {
+          code: 'service_unavailable',
+          message: ['附件存储暂时不可用，请稍后再试'],
+        },
+        HttpStatus.SERVICE_UNAVAILABLE,
+      );
+    }
+
+    // Then the provider's copy, which is what makes the message sendable at all.
+    const uploaded = await this.delivery.uploadMedia({
+      tenantId,
+      storeId: conversation.storeId,
+      kind: file.kind,
+      mimeType: file.mimeType,
+      bytes: input.file.buffer,
+      fileName: file.fileName,
+    });
+    if (!uploaded.ok) {
+      // The status and the stable code come from the one table that maps an
+      // adapter refusal onto the HTTP edge, so a provider outage is answered
+      // here exactly as it is on the send the retries carry. Only the wording
+      // is this method's: a seat who just picked a file is told about the
+      // channel, not handed the provider's own sentence.
+      const refusal = channelFailureFromAdapter(uploaded);
+      throw new HttpException(
+        { code: refusal.code, message: [uploadRefusalReason(uploaded.code)] },
+        refusal.status,
+      );
+    }
+
+    try {
+      const result = await this.repository.sendOutbound({
+        tenantId,
+        storeId: conversation.storeId,
+        conversationId,
+        content,
+        source: input.source,
+        messageType: file.kind,
+        media: {
+          key: objectKey,
+          mimeType: file.mimeType,
+          bytes: file.byteSize,
+          name: file.fileName,
+          providerMediaId: uploaded.value.mediaId,
+        },
+        ...(input.dedupKey === undefined ? {} : { dedupKey: input.dedupKey }),
+      });
+      const dispatched: DispatchedMessage = {
+        message: result.message,
+        delivery: await this.delivery.dispatch(conversation, result.message),
+      };
+      if (result.created) {
+        this.realtime.messageCreated(result.message);
+      }
+      return dispatched;
+    } catch (error) {
+      this.throwWriteRefusal(error);
+    }
+  }
+
+  /**
+   * Load the conversation a reply is about to be sent to, and refuse the reply
+   * if it may not be sent.
+   *
+   * One method for both send paths, because a file is not a second kind of
+   * permission: the media route checks exactly what the text route checks, and
+   * two copies of that prologue would be two answers to "may this seat answer
+   * this customer" the first time one of them was edited.
+   *
+   * 「已结束」先答，因为它是一条关于会话的事实，和谁在问无关——换句话说，这个读者
+   * 本来就读得到这条已结束的会话（结束的会话没有受理人）。然后是「这单是不是你的」：
+   * 同事的会话不是可以插话的群聊，转交出去之后原受理人也已经说完了。池子里的单没人
+   * 接走，这条对它不成立（见 core 的判据）。
+   *
+   * @param tenantId - Effective tenant scope.
+   * @param conversationId - The conversation being replied to.
+   * @param member - The acting seat.
+   * @returns The conversation, safe to reply to.
+   * @throws {NotFoundException} When it is not in this tenant.
+   * @throws {ConflictException} When it is closed.
+   * @throws {ForbiddenException} When the seat is not the one handling it.
+   */
+  private async replyTarget(
+    tenantId: string,
+    conversationId: string,
+    member: Member,
+  ): Promise<Conversation> {
+    const conversation = await this.requireConversation(tenantId, conversationId, member);
+    if (conversation.status === 'closed') {
+      throw new ConflictException('cannot send an outbound message to a closed conversation');
+    }
+    if (!maySendToConversation({ conversation, memberId: member.id })) {
+      throw new ForbiddenException('only the assigned seat may reply to this conversation');
+    }
+    return conversation;
+  }
+
+  /**
+   * Report a durable adapter's write refusal with the status this route would
+   * have produced.
+   *
+   * A durable adapter re-validates the conversation inside its own transaction,
+   * so a conversation that closed between the check above and the write is
+   * refused *there*, as a value rather than as an HTTP status. Both send paths
+   * answer that with the same status their own pre-checks would have: an
+   * `invalid_state` write refusal is the same fact as a closed conversation, and
+   * reporting it as an internal error would describe a race the seat cannot act
+   * on.
+   *
+   * @param error - Whatever the repository threw.
+   * @throws {NotFoundException} When the message's conversation was not found.
+   * @throws {ConflictException} When it closed before the write landed.
+   */
+  private throwWriteRefusal(error: unknown): never {
+    if (error instanceof PlatformWriteError) {
+      switch (error.code) {
+        case 'not_found':
+          throw new NotFoundException('conversation not found in tenant scope');
+        case 'invalid_state':
+          throw new ConflictException('cannot send an outbound message to a closed conversation');
+      }
+    }
+    throw error;
   }
 
   /**
@@ -820,3 +1072,52 @@ export class ConversationsService {
     }
   }
 }
+
+/**
+ * What an outbound media message's content says.
+ *
+ * The content is derived here rather than taken from the request, because a
+ * client-supplied caption would be stored and then never reach the customer:
+ * the channel's picture, clip and document messages carry no text field at all,
+ * so anything a seat typed beside the file would be a promise the bubble cannot
+ * keep. What the customer reads underneath a document is its name, and the
+ * name the platform kept is the cleaned one, so that is the content.
+ *
+ * A picture or a clip has no such text — the name is `IMG_20261006_3x.jpg`,
+ * which tells the customer nothing — so its content is the platform's own
+ * placeholder. That is also what the transcript falls back to when the media
+ * itself cannot be shown, which keeps one string answering both questions.
+ *
+ * @param kind - Which of the three media kinds was validated.
+ * @param fileName - The cleaned file name.
+ * @returns The content to store on the message.
+ */
+function mediaMessageContent(kind: OutboundMediaKind, fileName: string): string {
+  return kind === 'file' ? fileName : channelMessagePlaceholder(kind);
+}
+
+/**
+ * One sentence for a seat about why the channel would not take their file.
+ *
+ * The seat is standing at the picker with the file still in hand, so the
+ * sentence has to say what to do next: configure the channel, pick a different
+ * file, or simply try again. The provider's own message says none of that, and
+ * it is not what `details` is for.
+ *
+ * @param code - The adapter's stable refusal code.
+ * @returns A sentence naming the next step.
+ */
+function uploadRefusalReason(code: ChannelFailureCode): string {
+  switch (code) {
+    case 'channel_not_configured':
+      return '尚未配置企业微信渠道，暂时无法发送附件';
+    case 'channel_disabled':
+      return '企业微信渠道已停用，暂时无法发送附件';
+    case 'channel_invalid_request':
+      return '附件不符合渠道要求，请换一个文件后重试';
+    case 'channel_provider_error':
+    case 'channel_delivery_unknown':
+      return '企业微信暂时无法接收附件，请稍后再试';
+  }
+}
+

@@ -96,12 +96,14 @@ describe('Mock WeCom message loop (interface)', () => {
     body: Record<string, unknown>,
     memberId = 'u-t1-admin',
   ): Promise<Record<string, unknown>> {
+    // `200`, not the Nest default `201`: WeCom reads only `200` as "received"
+    // and retries anything else, so the callback routes declare it explicitly.
     const response = await request(app.getHttpServer())
       .post('/api/v1/channels/wecom/webhook')
       .set('x-member-id', memberId)
       .set(SIGNATURE)
       .send(body)
-      .expect(201);
+      .expect(200);
     return dataOf(response.body);
   }
 

@@ -73,6 +73,10 @@ import {
   type WecomConnectionVerdict,
 } from './channels.service';
 import { unwrapChannel } from './channel-outcome';
+import {
+  WecomCallbackSelfCheckService,
+  type WecomCallbackSelfCheckVerdict,
+} from './wecom-callback-selfcheck.service';
 
 /** Channel configuration and transport callback surface. */
 @Controller('channels')
@@ -85,6 +89,7 @@ export class ChannelsController {
     private readonly delivery: ChannelDeliveryService,
     @Inject(WECOM_REAL_TRANSPORT) private readonly realTransport: WecomRealTransport | null,
     private readonly wecomSync: WecomSyncService,
+    private readonly selfCheck: WecomCallbackSelfCheckService,
   ) {}
 
   /** Report the operational status of each configured channel provider. */
@@ -213,6 +218,40 @@ export class ChannelsController {
   }
 
   /**
+   * Check a callback URL against the handshake WeCom will run on it.
+   *
+   * The URL is the operator's own public address for this deployment, which is
+   * the one value in the whole onboarding sequence the platform cannot know: the
+   * console-derived address is right only when the console is itself opened on
+   * the public origin. So the caller supplies it, and the platform asks it the
+   * same question WeCom asks at registration — with the credential set this
+   * deployment actually holds — and reports which step answered what.
+   *
+   * **Platform administrators only**, for the same reason the credential write
+   * is: this route makes a server-side request to a URL the caller chose, and it
+   * signs that request with the deployment-wide customer-service credential.
+   * Neither is a tenant administrator's to reach. The URL is additionally held
+   * to `https` on a publicly resolvable host with no redirects followed — see
+   * {@link WecomCallbackSelfCheckService} for the full narrowing and for what a
+   * passing check does and does not prove.
+   *
+   * `200` whether or not the handshake round-tripped: the check *ran*, and its
+   * verdict is the result. `ok: false` is a finding, not a request failure, so
+   * a refusal here is reserved for a caller the route will not serve at all.
+   */
+  @Post('wecom/callback-selfcheck')
+  @HttpCode(HttpStatus.OK)
+  async callbackSelfCheck(@Req() req: Request): Promise<WecomCallbackSelfCheckVerdict> {
+    const member = this.access.resolveMember(req);
+    this.access.requirePlatformAdmin(member);
+    // `jsonBodyOf` for the same reason the credentials route reads its body this
+    // way: this path sits under the callback prefix, where the raw bytes are
+    // taken before Nest's parser runs, so `@Body()` would always be empty here.
+    const record = jsonBodyOf(req);
+    return this.selfCheck.check(bodyRequiredString(record, 'url'));
+  }
+
+  /**
    * Push pending outbound messages to real customers.
    *
    * {@link ChannelsService.syncMessages} refuses unconditionally, so this route
@@ -261,7 +300,44 @@ export class ChannelsController {
    */
   @Public()
   @Post('wecom/webhook')
+  // WeCom reads *only* `200` as "received" and retries anything else, so the
+  // Nest default of `201` for a POST is a failure to the provider even though
+  // it is a success by HTTP semantics. Both callback routes answer `200`.
+  @HttpCode(HttpStatus.OK)
   async webhook(@Req() req: Request): Promise<unknown> {
+    return this.#ingestCallback(req);
+  }
+
+  /**
+   * Receive a message or event on the same URL the handshake answers on.
+   *
+   * WeCom's 「接收事件服务器」 is configured with **one** URL, and it uses both
+   * verbs on it: a GET to verify the address, then a POST of every message and
+   * event. Splitting the two across paths made a correct registration
+   * impossible — registering the handshake path left every POST answered by
+   * nothing, and registering the POST path failed the GET verification so WeCom
+   * refused to store it. Both verbs therefore answer on this path, which is the
+   * one the console puts in the operator's hands.
+   *
+   * `wecom/webhook` stays as the alias it has always been, for a deployment that
+   * already registered it. Both routes run the same {@link ChannelsController.#ingestCallback},
+   * so a callback cannot be authenticated or recorded differently depending on
+   * which one the provider was pointed at.
+   */
+  @Public()
+  @Post('wecom/callback')
+  @HttpCode(HttpStatus.OK)
+  async callbackMessage(@Req() req: Request): Promise<unknown> {
+    return this.#ingestCallback(req);
+  }
+
+  /**
+   * Ingest one WeCom callback, whichever route delivered it.
+   *
+   * @param req - Incoming callback request, read from its raw bytes.
+   * @returns The ingestion result the transport produced.
+   */
+  async #ingestCallback(req: Request): Promise<unknown> {
     const callback = {
       signature: callbackSignature(req),
       timestamp: queryString(req.query, 'timestamp'),

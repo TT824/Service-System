@@ -253,6 +253,77 @@ describe.skipIf(!reachable)('Channel reliability persistence (PostgreSQL)', () =
     ).toBeUndefined();
   });
 
+  /**
+   * The inline send in the API takes the entry's lease before it calls the
+   * provider, so a Worker and the API can never both send the same entry.
+   *
+   * The statement it runs binds three things that must stay three parameters:
+   * the entry id, the clock reading, and the lease expiry. An earlier revision
+   * spelled `id = $2` and `lease_expires_at <= $2`, which PostgreSQL resolves to
+   * one type for the whole statement — it picked `text` for the id, and the
+   * comparison then failed outright with `operator does not exist: timestamp
+   * with time zone <= text`, so *every* outbound send through the API answered
+   * 500 after its message row had already been committed. Only a real database
+   * rejects that statement, which is why the interface tests using the
+   * in-memory adapter saw nothing.
+   */
+  it('takes the send lease by entry id and reports the second claim as lost', async () => {
+    const messageId = await seedMessage('claim');
+    const created = await repository.createDelivery({
+      tenantId,
+      storeId,
+      conversationId,
+      messageId,
+      channel: 'wecom',
+      externalCustomerId: `customer-cr-${RUN}`,
+      externalConversationId: `external-cr-${RUN}`,
+      now: now(),
+    });
+    const outbox = await repository.enqueueOutbox({
+      tenantId,
+      storeId,
+      deliveryId: created.delivery.id,
+      messageId,
+      now: now(),
+    });
+
+    const claimedAt = now();
+    const claimed = await repository.claimOutboxForSend({
+      tenantId,
+      outboxId: outbox.id,
+      owner: 'integration-spec-inline-send',
+      now: claimedAt,
+      leaseMs: 60_000,
+    });
+    // Claiming by id: the clock reading must not be what the entry is matched
+    // against, or nothing is ever claimed and the send silently belongs to the
+    // Worker instead.
+    expect(claimed?.id).toBe(outbox.id);
+    expect(claimed?.status).toBe('pending');
+    expect(claimed?.updatedAt).toBe(claimedAt);
+
+    // The lease is live, so the same entry cannot be claimed a second time —
+    // this is the duplicate the claim exists to prevent.
+    const second = await repository.claimOutboxForSend({
+      tenantId,
+      outboxId: outbox.id,
+      owner: 'integration-spec-other-sender',
+      now: now(),
+      leaseMs: 60_000,
+    });
+    expect(second).toBeUndefined();
+
+    // An expired lease is the recovery path: the next claimant passes it.
+    const recovered = await repository.claimOutboxForSend({
+      tenantId,
+      outboxId: outbox.id,
+      owner: 'integration-spec-after-lapse',
+      now: new Date(Date.parse(claimedAt) + 61_000).toISOString(),
+      leaseMs: 60_000,
+    });
+    expect(recovered?.id).toBe(outbox.id);
+  });
+
   it('opens a reply window and enforces its budget atomically', async () => {
     const key = {
       tenantId,

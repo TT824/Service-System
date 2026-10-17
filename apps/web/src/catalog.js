@@ -3,7 +3,14 @@
   const $ = id => document.getElementById(id);
   const esc = value => String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
   const shelf = {on_shelf:'上架',off_shelf:'下架',unknown:'未知'};
+  // SPU 的搜索文本：五个字段拼成一条小写串。这把尺子由「SPU / SKU」「知识库 → 商品」和
+  // 「商品库」三处搜索共用（经 window.KefuSpuSearchText 暴露）；以前三处各写一份，
+  // 商品库那份漏了公共属性，同一个词在两个页面就会给出不同的命中。
+  const spuSearchText = spu => JSON.stringify([spu.productCode,spu.title,spu.subtitle,spu.sellingPoints,spu.commonAttributes]).toLowerCase();
   let ctx, scope, spus=[], categories=[], current=null, skus=[], sku=null, loaded=false, loading=false, busy=false, epoch=0, detailEpoch=0;
+  // 别处（商品导入、商品库页）改过目录之后，本页手上这份列表就过期了。`invalidated`
+  // 记的就是这件事：它让下一次进入这一页签重新读一遍，而不是把旧数据当缓存一直端上来。
+  let invalidated=false;
   const writable = () => ctx?.active() && ctx.canWrite() && !busy;
   const stamp = value => value ? new Date(value).toLocaleString('zh-CN', {hour12:false}) : '—';
   const field = (name, label, value='', type='text', locked=false) => `<label for="catalog-${name}">${label}</label><input class="field" id="catalog-${name}" type="${type}" value="${esc(value)}" ${locked||!writable()?'disabled':''}>`;
@@ -38,7 +45,7 @@
   function list() {
     if(!ctx?.active())return;
     const q=$('knowledge-search').value.trim().toLowerCase(),status=$('knowledge-status-filter').value;
-    const items=spus.filter(p=>(status==='all'||(status==='enabled'?p.shelfStatus==='on_shelf':p.shelfStatus==='off_shelf'))&&JSON.stringify([p.productCode,p.title,p.subtitle,p.sellingPoints,p.commonAttributes]).toLowerCase().includes(q));
+    const items=spus.filter(p=>(status==='all'||(status==='enabled'?p.shelfStatus==='on_shelf':p.shelfStatus==='off_shelf'))&&spuSearchText(p).includes(q));
     $('knowledge-count').textContent=loaded?`${items.length} / ${spus.length} 个 SPU`:'—';
     $('knowledge-list').innerHTML=`<div class="catalog-list-tools"><span>结构化商品与“商品”页签独立维护；状态筛选：已启用＝上架，已停用＝下架。</span><button type="button" class="small-link" id="catalog-refresh" ${loading||busy?'disabled':''}>刷新</button></div>`+(loaded?items.length?`<div class="knowledge-table-wrap"><table class="table knowledge-table"><thead><tr><th>商品 / SPU 编码</th><th>门店</th><th>状态</th><th>更新时间</th><th>操作</th></tr></thead><tbody>${items.map(p=>`<tr class="${p.id===current?.id?'knowledge-row-selected':''}"><td><span class="knowledge-table-main">${esc(p.title)}</span><span class="knowledge-table-sub">${esc(p.productCode)}</span></td><td>${esc(scope.stores.find(s=>s.id===p.storeId)?.name||p.storeId)}</td><td>${esc(shelf[p.shelfStatus])}</td><td>${esc(stamp(p.updatedAt))}</td><td><button class="small-link" type="button" data-catalog-open="${esc(p.id)}" ${busy?'disabled':''}>${writable()?'编辑':'查看'}</button></td></tr>`).join('')}</tbody></table></div>`:'<div class="empty">当前条件下没有 SPU；管理员可点击“创建 SPU”。</div>':'<div class="empty">正在读取结构化商品…</div>');
     $('catalog-refresh').onclick=()=>void load(true);
@@ -86,13 +93,13 @@
     bindRows();
   }
   async function load(force=false) {
-    if(!ctx?.active()||loading||busy||loaded&&!force)return;
+    if(!ctx?.active()||loading||busy||loaded&&!force&&!invalidated)return;
     loading=true;const n=++epoch;list();editor();
     try {
       const s=await ctx.scope();
       const [rows,cats]=await Promise.all([ctx.api.catalogSpus(s.tenantId),ctx.api.catalogCategories(s.tenantId)]);
       if(n!==epoch||!ctx.active())return;
-      scope=s;spus=rows;categories=cats;loaded=true;current=null;skus=[];sku=null;++detailEpoch;
+      scope=s;spus=rows;categories=cats;loaded=true;invalidated=false;current=null;skus=[];sku=null;++detailEpoch;
       $('knowledge-scope-note').className='knowledge-scope-note';
       $('knowledge-scope-note').textContent=`${s.tenantName} · SPU / SKU 详细维护 · ${ctx.canWrite()?'管理员可修改':'客服只读'} · 与旧商品条目独立`;
     } catch(e) {if(n===epoch&&ctx.active()){$('knowledge-scope-note').className='knowledge-scope-note error';$('knowledge-scope-note').textContent=e.message||'商品读取失败，请刷新重试'}}
@@ -143,6 +150,11 @@
     catch(e){error=e.message||'SKU 保存失败'}
     finally {if(n===epoch){busy=false;unlock();if(ctx.active()){if(error)$('catalog-sku-error').textContent=error;else editor();list()}}}
   }
-  function reset(){++epoch;++detailEpoch;ctx=null;scope=null;spus=[];categories=[];current=null;skus=[];sku=null;loaded=false;loading=false;busy=false;$('catalog-editor').innerHTML=''}
-  window.KefuCatalog={render(options){if(ctx?.session!==options.session)reset();ctx={...options};editor();list();void load()},list,newSpu,reset};
+  function reset(){++epoch;++detailEpoch;ctx=null;scope=null;spus=[];categories=[];current=null;skus=[];sku=null;loaded=false;loading=false;busy=false;invalidated=false;$('catalog-editor').innerHTML=''}
+  // 别处改过目录之后叫这一声。页面不在这一页签时 refresh 不会发请求（load 有 active 门），
+  // 但 invalidated 会留着，等进入页签时补读——否则「导入完成」之后看到的是导入前的列表。
+  function invalidate(){invalidated=true}
+  window.KefuCatalog={render(options){if(ctx?.session!==options.session)reset();ctx={...options};editor();list();void load()},list,newSpu,reset,invalidate,refresh:()=>load(true)};
+  // 三处搜索共用的匹配口径，见上面的 spuSearchText；products.js 与 app.js 从这里取。
+  window.KefuSpuSearchText = spuSearchText;
 })();

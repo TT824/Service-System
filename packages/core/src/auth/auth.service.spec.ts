@@ -542,6 +542,30 @@ describe('AuthService.loginWithPassword', () => {
     expect(session.access.accountStatus).toBe('active');
   });
 
+  it('does not strand a signed-in session once the lock window elapses', async () => {
+    // A session opened while the account was healthy has to outlive the lock:
+    // otherwise locking the account silently turns the console the sign-in
+    // already opened into a wall of refusals until the next sign-in.
+    const live = await h.service.loginWithPassword({ username: 'alice', password: PASSWORD });
+    for (let attempt = 0; attempt < DEFAULT_AUTH_POLICY.password.maxFailedLogins; attempt += 1) {
+      await expectCode(
+        h.service.loginWithPassword({ username: 'alice', password: 'wrong-password' }),
+        'invalid_credentials',
+      );
+    }
+    expect((await h.service.resolveSession(live.token)).access.accessState).toBe('disabled');
+
+    h.clock.advance(DEFAULT_AUTH_POLICY.password.lockMs);
+
+    // The row still reads `locked` — only a successful sign-in rewrites it — yet
+    // the lock has lapsed, so the session is usable again. Alice holds no member
+    // link, so her ordinary state is `pending_config` rather than `active`.
+    expect((await h.repository.findUserByUsername('alice'))?.status).toBe('locked');
+    expect((await h.service.resolveSession(live.token)).access.accessState).toBe(
+      'pending_config',
+    );
+  });
+
   it('resets the failure counter after a successful sign-in', async () => {
     await expectCode(
       h.service.loginWithPassword({ username: 'alice', password: 'wrong-password' }),
@@ -549,6 +573,43 @@ describe('AuthService.loginWithPassword', () => {
     );
     await h.service.loginWithPassword({ username: 'alice', password: PASSWORD });
     expect((await h.repository.findUserByUsername('alice'))?.failedLoginCount).toBe(0);
+  });
+
+  it('leaves the account usable after two failures and locks on the third', async () => {
+    for (const attempt of [1, 2]) {
+      await expectCode(
+        h.service.loginWithPassword({ username: 'alice', password: 'wrong-password' }),
+        'invalid_credentials',
+      );
+      const account = await h.repository.findUserByUsername('alice');
+      expect(account?.status).not.toBe('locked');
+      expect(account?.failedLoginCount).toBe(attempt);
+    }
+    await expectCode(
+      h.service.loginWithPassword({ username: 'alice', password: 'wrong-password' }),
+      'invalid_credentials',
+    );
+    expect((await h.repository.findUserByUsername('alice'))?.status).toBe('locked');
+  });
+
+  it('gives the two-failure budget back after a successful sign-in', async () => {
+    // The counter is consecutive, so signing in has to wipe it: otherwise a
+    // mistyped password from an earlier session would spend the budget for a
+    // later one, and the third strike would arrive looking like the first.
+    for (let attempt = 0; attempt < DEFAULT_AUTH_POLICY.password.maxFailedLogins - 1; attempt += 1) {
+      await expectCode(
+        h.service.loginWithPassword({ username: 'alice', password: 'wrong-password' }),
+        'invalid_credentials',
+      );
+    }
+    await h.service.loginWithPassword({ username: 'alice', password: PASSWORD });
+    await expectCode(
+      h.service.loginWithPassword({ username: 'alice', password: 'wrong-password' }),
+      'invalid_credentials',
+    );
+    const account = await h.repository.findUserByUsername('alice');
+    expect(account?.status).not.toBe('locked');
+    expect(account?.failedLoginCount).toBe(1);
   });
 
   it('refuses a disabled account', async () => {

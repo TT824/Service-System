@@ -41,7 +41,6 @@
       <div class="overview-detail"><span>会话分配</span><strong>系统自动</strong></div>
       <div class="overview-detail"><span>候选采纳率</span><strong>63.8%</strong></div>
       <div class="overview-detail"><span>手打率</span><strong>17.6%</strong></div>
-      <p>以上为原型演示数据。订单、满意度和转化指标将在对应业务系统接入后显示。</p>
     </div>
   </div>
   <aside class="queue">
@@ -94,6 +93,9 @@
         </div>
       </div>
       <div class="chat-actions">
+        <button class="btn" id="export-conversation-btn" hidden title="把这条会话的聊天记录交给数据导出页生成文件">
+          导出对话记录
+        </button>
         <button class="btn" id="assignment-history-btn" hidden>分配历史</button>
         <button class="btn" id="transfer-btn">
           转接
@@ -146,8 +148,8 @@
           人工确认后发送
         </span>
       </div>
-      <input id="reply-image-file" type="file" accept="image/png,image/jpeg,image/webp,image/gif" hidden>
-      <input id="reply-video-file" type="file" accept="video/*" hidden>
+      <input id="reply-image-file" type="file" accept="image/png,image/jpeg,image/gif" hidden>
+      <input id="reply-video-file" type="file" accept="video/mp4" hidden>
       <input id="reply-document-file" type="file" hidden>
       <div id="reply-attachment" class="reply-attachment" hidden><img id="reply-attachment-image" alt="待发送图片" hidden><span id="reply-attachment-icon" class="reply-attachment-icon" aria-hidden="true" hidden></span><span id="reply-attachment-name" class="reply-attachment-name"></span><button id="remove-attachment" class="small-link" type="button">移除</button></div>
       <div class="reply-input-wrap">
@@ -179,7 +181,22 @@
     <div class="group-chat-note" id="group-chat-note">此处是团队内部群聊演示，消息不会发送到微信客服客户。</div>
     <div class="messages" id="group-chat-messages" aria-live="polite"></div>
     <div class="composer">
-      <div class="composer-toolbar"><strong class="group-composer-label" id="group-composer-label">发送到内部群聊</strong><span class="pill green">仅本地演示</span></div>
+      <div class="composer-toolbar">
+        <div class="tool-group" aria-label="内部会话工具">
+          <div class="emoji-control">
+            <button class="tool" data-tooltip="表情" aria-label="表情" aria-expanded="false" aria-controls="group-emoji-picker" id="group-emoji-btn" type="button"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M8 14a4 4 0 0 0 8 0M8 9h.01M16 9h.01"/></svg></button>
+            <div id="group-emoji-picker" class="emoji-picker" aria-label="选择表情" hidden></div>
+          </div>
+          <button class="tool" data-tooltip="发送图片" aria-label="发送图片" id="group-image-btn" type="button"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="3"/><circle cx="8" cy="8" r="1"/><path d="m3 17 6-6 4 4 3-3 5 5"/></svg></button>
+          <button class="tool" data-tooltip="发送视频" aria-label="发送视频" id="group-video-btn" type="button"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="2" y="5" width="15" height="14" rx="2"/><path d="m17 10 5-3v10l-5-3z"/></svg></button>
+          <button class="tool" data-tooltip="发送文件" aria-label="发送文件" id="group-file-btn" type="button"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 2h9l5 5v15H5zM14 2v5h5M8 12h8M8 16h8"/></svg></button>
+        </div>
+        <span class="toolbar-note"><strong class="group-composer-label" id="group-composer-label">发送到内部群聊</strong><span class="pill green" id="group-composer-pill">仅本地演示</span></span>
+      </div>
+      <input id="group-image-file" type="file" accept="image/png,image/jpeg,image/webp,image/gif" hidden>
+      <input id="group-video-file" type="file" accept="video/*" hidden>
+      <input id="group-document-file" type="file" hidden>
+      <div id="group-attachment" class="reply-attachment" hidden><img id="group-attachment-image" alt="待发送附件" hidden><span id="group-attachment-icon" class="reply-attachment-icon" aria-hidden="true" hidden></span><span id="group-attachment-name" class="reply-attachment-name"></span><button id="group-remove-attachment" class="small-link" type="button">移除</button></div>
       <textarea id="group-chat-reply" placeholder="输入群消息…"></textarea>
       <div class="composer-foot"><span class="hint">Enter 发送 · Shift+Enter 换行</span><button class="btn primary" id="group-chat-send" type="button">发送群消息 ↗</button></div>
     </div>

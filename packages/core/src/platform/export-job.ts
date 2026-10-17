@@ -397,6 +397,9 @@ export function renderTranscript(input: {
  * 行首是最后活动时间，让文件能按时间读。**电话不进这一行**：它在每一行都是空的，
  * 而一列恒空的值写进文本只是噪声（表格里保留那一列是因为表头能说明它的空）。
  *
+ * 文件头只说「时间均为 UTC」而不说「消息时间」：这份名单里没有消息，抬头声称有
+ * 消息时间，读者会往下找对话。
+ *
  * @param rows - 顾客行。
  * @param input - 口径说明与生成时刻。
  * @returns 文本内容，行尾是 `\n`。
@@ -408,7 +411,9 @@ export function renderCustomerList(
   const lines: Array<string> = [
     `导出内容：${input.label}`,
     `导出时间：${input.generatedAt}`,
-    '消息时间均为 UTC。',
+    // 这份文件里没有消息，只有人：写「消息时间均为 UTC」会让读者以为下面还有对话。
+    // 行首的时间是每个顾客的最后活动时间，所以只说「时间」。
+    '时间均为 UTC。',
     '',
   ];
   if (rows.length === 0) {

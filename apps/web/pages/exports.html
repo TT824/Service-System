@@ -1,17 +1,18 @@
 <!-- 数据导出：按公司查询真实任务，创建请求后等待后台生成文件。 -->
 <section id="exports" class="page">
-  <div class="page-head"><div><h1>数据导出</h1><p class="muted">导出顾客数据或单条会话，任务完成后下载 Excel 和对话记录。</p></div></div>
+  <div class="page-head"><div><h1>数据导出</h1><p class="muted">导出顾客名单或单条会话的聊天记录，任务完成后下载 Excel 和对应文本文件。</p></div></div>
   <div class="panel export-panel">
     <div class="panel-head"><span class="panel-title">创建导出任务</span></div>
     <form id="export-form" class="export-form">
       <label>公司<select id="export-tenant" class="field" required><option value="">正在读取…</option></select></label>
-      <label>导出范围<select id="export-scope" class="field"><option value="customers">顾客数据</option><option value="conversation">单条会话记录</option></select></label>
+      <label>导出范围<select id="export-scope" class="field"><option value="customers">顾客数据（名单）</option><option value="conversation">单条会话记录（含对话）</option></select></label>
       <div id="export-customer-fields" class="export-filter-fields">
         <label>顾客关键词<input id="export-query" class="field" maxlength="200" placeholder="可留空，导出全部符合条件的顾客"></label>
         <label>开始日期<input id="export-from" class="field" type="date"></label>
         <label>结束日期<input id="export-to" class="field" type="date"></label>
       </div>
       <label id="export-conversation-field" hidden>会话<select id="export-conversation" class="field"><option value="">请选择会话</option></select></label>
+      <p id="export-scope-hint" class="export-scope-hint muted"></p>
       <p class="muted">日期按 UTC 自然日筛选；导出文件中的时间为 UTC。顾客导出最多 5,000 位，消息最多 20,000 条，以后端结果为准。</p>
       <div><button id="export-submit" class="btn primary" type="submit">创建导出任务</button></div>
     </form>

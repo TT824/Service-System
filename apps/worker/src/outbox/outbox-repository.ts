@@ -37,6 +37,7 @@ import type {
   DeliveryFailureCode,
   MessageDelivery,
   MessageType,
+  ProviderMediaRef,
   SendQuotaWindow,
 } from '@kefu/core';
 
@@ -54,6 +55,21 @@ export type OutboxMessage = {
   readonly tenantId: string;
   readonly messageType: MessageType;
   readonly content: string;
+  /**
+   * The provider's handle for this message's media, when it has any.
+   *
+   * Read from the row rather than carried on the outbox entry, because the
+   * handle is a fact about the message and not about the attempt: the API
+   * uploaded the bytes before writing either, and every retry has to name the
+   * same handle. The entry itself stores no payload by design — see
+   * {@link OutboxRepository} — so this is the one thing a retry recovers from
+   * the message row rather than from the queue.
+   *
+   * Both halves or neither: a row with a type and no handle is a message whose
+   * upload never happened, and {@link providerMediaOf} reads it as "no media"
+   * rather than sending a bubble that could never be played.
+   */
+  readonly media: ProviderMediaRef | null;
 };
 
 /**

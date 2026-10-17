@@ -6,6 +6,7 @@ import {
   countWithinWindow,
   DEFAULT_AUTH_POLICY,
   deriveAccessState,
+  effectiveAccountStatus,
   effectiveDeviceStatus,
   isDeviceUsable,
   isOtpResendCoolingDown,
@@ -173,6 +174,39 @@ describe('addMilliseconds', () => {
   it('adds and subtracts a duration', () => {
     expect(addMilliseconds('2026-09-10T00:00:00.000Z', 60_000)).toBe('2026-09-10T00:01:00.000Z');
     expect(addMilliseconds('2026-09-10T00:00:00.000Z', -60_000)).toBe('2026-09-09T23:59:00.000Z');
+  });
+});
+
+describe('effectiveAccountStatus', () => {
+  const NOW = '2026-09-10T00:00:00.000Z';
+
+  it('leaves every status that is not a lock untouched', () => {
+    for (const status of ['pending', 'active', 'disabled'] as const) {
+      expect(effectiveAccountStatus({ status, lockedUntil: null }, NOW)).toBe(status);
+      // A stale instant on a status that is not a lock decides nothing.
+      expect(
+        effectiveAccountStatus({ status, lockedUntil: '2026-09-11T00:00:00.000Z' }, NOW),
+      ).toBe(status);
+    }
+  });
+
+  it('keeps a lock that is still ahead', () => {
+    expect(
+      effectiveAccountStatus({ status: 'locked', lockedUntil: '2026-09-10T00:00:00.001Z' }, NOW),
+    ).toBe('locked');
+  });
+
+  it('releases a lock the moment its instant is reached', () => {
+    // A lock ends *at* its instant, the same edge `effectiveDeviceStatus` takes
+    // for device expiry: `lockedUntil === now` is already released.
+    expect(effectiveAccountStatus({ status: 'locked', lockedUntil: NOW }, NOW)).toBe('active');
+    expect(
+      effectiveAccountStatus({ status: 'locked', lockedUntil: '2026-09-09T23:59:59.999Z' }, NOW),
+    ).toBe('active');
+  });
+
+  it('treats a lock without an instant as not locking', () => {
+    expect(effectiveAccountStatus({ status: 'locked', lockedUntil: null }, NOW)).toBe('active');
   });
 });
 

@@ -180,6 +180,7 @@ describe.skipIf(!reachable)('Platform persistence (PostgreSQL)', () => {
     ]);
     await pool.query('DELETE FROM faqs WHERE tenant_id = ANY($1::text[])', [tenants]);
     await pool.query('DELETE FROM shortcuts WHERE tenant_id = ANY($1::text[])', [tenants]);
+    await pool.query('DELETE FROM personal_phrases WHERE tenant_id = ANY($1::text[])', [tenants]);
     // Before `product_import_batches`, which the error rows point at with a
     // composite key. The cascade would clear them too; doing it explicitly keeps
     // the ordering here readable rather than dependent on a constraint.
@@ -203,6 +204,14 @@ describe.skipIf(!reachable)('Platform persistence (PostgreSQL)', () => {
     await pool.query('DELETE FROM audit_log WHERE tenant_id = ANY($1::text[])', [tenants]);
     await pool.query('DELETE FROM audit_log WHERE actor_member_id = ANY($1::text[])', [members]);
     await pool.query('DELETE FROM retention_policies WHERE tenant_id = ANY($1::text[])', [tenants]);
+    // Internal collaboration, deepest first: the attachment hangs off the
+    // message, which hangs off the thread. The cascades from `members` would
+    // clear them too; writing the order out keeps it independent of that.
+    await pool.query('DELETE FROM internal_attachments WHERE tenant_id = ANY($1::text[])', [
+      tenants,
+    ]);
+    await pool.query('DELETE FROM internal_messages WHERE tenant_id = ANY($1::text[])', [tenants]);
+    await pool.query('DELETE FROM internal_threads WHERE tenant_id = ANY($1::text[])', [tenants]);
     await pool.query('DELETE FROM members WHERE id = ANY($1::text[])', [members]);
     await pool.query('DELETE FROM stores WHERE id = ANY($1::text[])', [[storeA, storeB]]);
     await pool.query('DELETE FROM tenants WHERE id = ANY($1::text[])', [tenants]);
@@ -1009,12 +1018,12 @@ describe.skipIf(!reachable)('Platform persistence (PostgreSQL)', () => {
     // 转交那一刻就是读回来的那个时间戳本身，不是「大概在这附近」。
     expect(await repository.lastHandoverFrom(tenantA, mine.id, agentA)).toBe(handedOverAt);
     // 收到的那位是新受理人，队列里有它；交出去的那位也还看得见（历史在他那儿）。
-    expect((await repository.listConversations(tenantA, storeA, agentC)).map((r) => r.id)).toContain(
-      mine.id,
-    );
-    expect((await repository.listConversations(tenantA, storeA, agentA)).map((r) => r.id)).toContain(
-      mine.id,
-    );
+    expect(
+      (await repository.listConversations(tenantA, storeA, agentC)).map((r) => r.id),
+    ).toContain(mine.id);
+    expect(
+      (await repository.listConversations(tenantA, storeA, agentA)).map((r) => r.id),
+    ).toContain(mine.id);
     // 但那位旁观者仍然看不到：接手的是别人，这条会话不是「从他手里出去的」。
     expect(
       (await repository.listConversations(tenantA, storeA, stranger)).map((r) => r.id),
@@ -1593,5 +1602,296 @@ describe.skipIf(!reachable)('Platform persistence (PostgreSQL)', () => {
       batch.id,
     ]);
     expect(await restarted.listImportErrors(tenantA, batch.id)).toEqual([]);
+  });
+
+  /**
+   * A personal phrase, written by one seat and readable by no other.
+   *
+   * The interface suite proves the rule against the in-memory store; this proves
+   * the SQL that enforces it, which is the half that a missing `member_id` in a
+   * `WHERE` clause would silently break. The colleague and the administrator are
+   * both asked, because "not yours" has to hold for someone who shares the
+   * tenant, the store and the whole knowledge base, and a tenant of its own is
+   * asked as well.
+   */
+  it('keeps a personal phrase to the member who wrote it, and lets nobody else read or change it', async () => {
+    const now = new Date().toISOString();
+    const mine = await repository.createPersonalPhrase({
+      tenantId: tenantA,
+      memberId: agentA,
+      category: '售前',
+      title: '欢迎咨询',
+      keywords: ['欢迎', '咨询'],
+      text: '您好，请问想了解哪款商品？',
+      now,
+    });
+    expect(mine).toMatchObject({
+      tenantId: tenantA,
+      memberId: agentA,
+      category: '售前',
+      keywords: ['欢迎', '咨询'],
+      enabled: true,
+    });
+
+    // A restarted client reads it back — the row is durable, not a cache.
+    const restarted = buildRepository(database);
+    expect((await restarted.listPersonalPhrases(tenantA, agentA)).map((item) => item.id)).toEqual([
+      mine.id,
+    ]);
+    // The colleague, another tenant, and the row's own tenant without the owner.
+    expect(await restarted.listPersonalPhrases(tenantA, agentC)).toEqual([]);
+    expect(await restarted.listPersonalPhrases(tenantB, agentB)).toEqual([]);
+    expect(await restarted.listPersonalPhrases(tenantA, 'nobody-with-that-id')).toEqual([]);
+    expect(await restarted.getPersonalPhrase(tenantA, agentC, mine.id)).toBeUndefined();
+
+    // A write by somebody else matches no row, so the patch is a no-op — and
+    // answers `undefined` rather than a row it should not have touched.
+    expect(
+      await restarted.updatePersonalPhrase(tenantA, agentC, mine.id, { title: '改掉' }, now),
+    ).toBeUndefined();
+    expect(await restarted.getPersonalPhrase(tenantA, agentA, mine.id)).toMatchObject({
+      title: '欢迎咨询',
+      enabled: true,
+    });
+
+    // The owner's own patch keeps what it does not name, and an empty array is a
+    // value: `COALESCE($n::text[], keywords)` would have kept the old words only
+    // if a clear were indistinguishable from an absent field, which it is not.
+    const retired = await restarted.updatePersonalPhrase(
+      tenantA,
+      agentA,
+      mine.id,
+      { enabled: false, keywords: [] },
+      now,
+    );
+    expect(retired).toMatchObject({ enabled: false, keywords: [], title: '欢迎咨询' });
+
+    // `member_id` is part of the row, not a filter a caller may omit: the
+    // foreign key to `members` is what makes an orphan impossible.
+    await expect(
+      pool.query(
+        `INSERT INTO personal_phrases
+           (id, tenant_id, member_id, category, title, keywords, text, enabled, updated_at, created_at)
+         VALUES ($1, $2, $3, '', '孤儿短语', '{}', '没有这个人', TRUE, $4, $4)`,
+        [`it-orphan-${RUN}`, tenantA, 'nobody-with-that-id', now],
+      ),
+    ).rejects.toThrow();
+  });
+
+  /**
+   * A colleague's file, from draft to delivered.
+   *
+   * The claim is the whole design: the bytes are written first and the row is a
+   * draft that only a send can attach to a message, exactly once, only for the
+   * member who uploaded it. The in-memory adapter proves the rule; this proves
+   * the SQL that enforces it — a `LEFT JOIN` the read path mints attachment URLs
+   * from, and an `UPDATE … WHERE message_id IS NULL` whose single row is what
+   * makes a second send fail instead of delivering the same file twice.
+   */
+  it('stores a colleague attachment, claims it exactly once, and scopes it by tenant and uploader', async () => {
+    const now = new Date().toISOString();
+    const thread = await repository.ensureDirectInternalThread({
+      tenantId: tenantA,
+      memberIdA: agentA,
+      memberIdB: agentC,
+      now,
+    });
+    const upload = async (id: string, uploader: string) =>
+      await repository.createInternalAttachment({
+        id,
+        tenantId: tenantA,
+        threadId: thread.id,
+        uploaderMemberId: uploader,
+        kind: 'image',
+        fileName: '对账单.png',
+        mimeType: 'image/png',
+        byteSize: 3,
+        objectKey: `tenants/${tenantA}/internal-attachments/${id}`,
+        createdAt: now,
+      });
+
+    const attachmentId = `it-attachment-${RUN}`;
+    const draft = await upload(attachmentId, agentA);
+    // Nothing points at it yet: it is a draft, and nothing else may make it
+    // reachable — no message can be built from an unclaimed row.
+    expect(draft.messageId).toBeNull();
+
+    const sent = stored(
+      await repository.appendInternalMessage({
+        tenantId: tenantA,
+        threadId: thread.id,
+        senderMemberId: agentA,
+        body: '',
+        attachmentId,
+        createdAt: now,
+      }),
+    );
+    expect(sent.attachment).toMatchObject({
+      id: attachmentId,
+      kind: 'image',
+      fileName: '对账单.png',
+      mimeType: 'image/png',
+      byteSize: 3,
+    });
+
+    // The read path joins the attachment on. Without that join a stored file
+    // would come back as a text-only message and the URL could never be minted.
+    const listed = await repository.listInternalMessages(tenantA, thread.id);
+    expect(listed.map((message) => message.attachment?.id ?? null)).toEqual([attachmentId]);
+
+    // Durable, not just an in-process flag: the claim is a column in the table.
+    const claimed = await pool.query('SELECT message_id FROM internal_attachments WHERE id = $1', [
+      attachmentId,
+    ]);
+    expect(claimed.rows[0]?.message_id).toBe(sent.id);
+
+    // Claimed once. A second message cannot take the same file, which is what
+    // stops one upload from being delivered twice under a replayed request.
+    expect(
+      await repository.appendInternalMessage({
+        tenantId: tenantA,
+        threadId: thread.id,
+        senderMemberId: agentA,
+        body: '再来一次',
+        attachmentId,
+        createdAt: now,
+      }),
+    ).toBeUndefined();
+
+    // The serve path's only lookup: by message, in the tenant the signature
+    // covered. A text-only message has no attachment, and another tenant does
+    // not resolve the id it cannot see.
+    expect((await repository.getInternalMessageAttachment(tenantA, sent.id))?.id).toBe(
+      attachmentId,
+    );
+    expect(await repository.getInternalMessageAttachment(tenantB, sent.id)).toBeUndefined();
+
+    // A draft belongs to the member who uploaded it: the other participant of
+    // the very same thread cannot claim it, and the refusal leaves it a draft
+    // for its owner rather than consuming it.
+    const colleagueDraft = `it-attachment-c-${RUN}`;
+    await upload(colleagueDraft, agentC);
+    expect(
+      await repository.appendInternalMessage({
+        tenantId: tenantA,
+        threadId: thread.id,
+        senderMemberId: agentA,
+        body: '抢同事的草稿',
+        attachmentId: colleagueDraft,
+        createdAt: now,
+      }),
+    ).toBeUndefined();
+    const stillDraft = await pool.query(
+      'SELECT message_id FROM internal_attachments WHERE id = $1',
+      [colleagueDraft],
+    );
+    expect(stillDraft.rows[0]?.message_id).toBeNull();
+    const colleagueSent = stored(
+      await repository.appendInternalMessage({
+        tenantId: tenantA,
+        threadId: thread.id,
+        senderMemberId: agentC,
+        body: '',
+        attachmentId: colleagueDraft,
+        createdAt: now,
+      }),
+    );
+    expect(colleagueSent.attachment?.id).toBe(colleagueDraft);
+  });
+
+  it('stores what a seat sent, with the media columns a document needs', async () => {
+    const conversation = await openConversation(`external-media-${RUN}`);
+    const sent = await repository.sendOutbound({
+      tenantId: tenantA,
+      storeId: storeA,
+      conversationId: conversation.id,
+      content: '报价单-2026-10.xlsx',
+      source: 'manual_typed',
+      messageType: 'file',
+      media: {
+        key: `tenants/${tenantA}/outbound-media/${RUN}.xlsx`,
+        mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        bytes: 20480,
+        name: '报价单-2026-10.xlsx',
+        providerMediaId: `MEDIA-FILE-${RUN}`,
+      },
+      dedupKey: `media-file-${RUN}`,
+    });
+    expect(sent.message.messageType).toBe('file');
+
+    // Read back through the repository, which is what a transcript does.
+    const reread = await repository.getMessage(tenantA, sent.message.id);
+    expect(reread?.media).toEqual({
+      key: `tenants/${tenantA}/outbound-media/${RUN}.xlsx`,
+      mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      bytes: 20480,
+      name: '报价单-2026-10.xlsx',
+      providerMediaId: `MEDIA-FILE-${RUN}`,
+    });
+    // And read the columns themselves, because the provider handle is what a
+    // retrying worker sends with: it never sees the domain object, only the row.
+    const row = await pool.query(
+      `SELECT message_type, media_key, media_mime, media_bytes, media_name, provider_media_id
+         FROM messages WHERE id = $1`,
+      [sent.message.id],
+    );
+    expect(row.rows[0]).toMatchObject({
+      message_type: 'file',
+      media_bytes: 20480,
+      media_name: '报价单-2026-10.xlsx',
+      provider_media_id: `MEDIA-FILE-${RUN}`,
+    });
+    // The row is tenant-owned like every other: the same id read from B is not
+    // there rather than someone else's.
+    expect(await repository.getMessage(tenantB, sent.message.id)).toBeUndefined();
+  });
+
+  it('takes a clip as a kind of its own, without a file name it may not have', async () => {
+    const conversation = await openConversation(`external-video-${RUN}`);
+    const sent = await repository.sendOutbound({
+      tenantId: tenantA,
+      storeId: storeA,
+      conversationId: conversation.id,
+      content: '开箱.mp4',
+      source: 'manual_typed',
+      messageType: 'video',
+      media: {
+        key: `tenants/${tenantA}/outbound-media/${RUN}.mp4`,
+        mimeType: 'video/mp4',
+        bytes: 1024 * 1024,
+        providerMediaId: `MEDIA-VIDEO-${RUN}`,
+      },
+      dedupKey: `media-video-${RUN}`,
+    });
+    // `video` is new vocabulary as of migration `0021`; before it, this insert
+    // was refused by the column's CHECK. A media message with no `media_name` is
+    // the legitimate case the naming CHECK has to let through.
+    expect(sent.message.messageType).toBe('video');
+    const reread = await repository.getMessage(tenantA, sent.message.id);
+    expect(reread?.media?.name).toBeNull();
+    expect(reread?.media?.providerMediaId).toBe(`MEDIA-VIDEO-${RUN}`);
+  });
+
+  it('refuses a row that names media it does not have', async () => {
+    const conversation = await openConversation(`external-naming-${RUN}`);
+    const text = await repository.sendOutbound({
+      tenantId: tenantA,
+      storeId: storeA,
+      conversationId: conversation.id,
+      content: '一条普通文字',
+      source: 'manual_typed',
+      dedupKey: `media-naming-${RUN}`,
+    });
+    // The repository cannot produce these rows — `outboundMessageMedia` refuses
+    // both shapes before any SQL runs — so the constraints are exercised
+    // directly, which is the only way to know they are actually there.
+    await expect(
+      pool.query(`UPDATE messages SET media_name = '报价单.pdf' WHERE id = $1`, [text.message.id]),
+    ).rejects.toThrow(/messages_media_naming_check/);
+    await expect(
+      pool.query(`UPDATE messages SET provider_media_id = 'MEDIA-1' WHERE id = $1`, [
+        text.message.id,
+      ]),
+    ).rejects.toThrow(/messages_media_naming_check/);
   });
 });

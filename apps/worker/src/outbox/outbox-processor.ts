@@ -76,6 +76,7 @@
 
 import {
   evaluateDeliveryWindow,
+  providerMediaOf,
   type ChannelResult,
   type ChannelOutboxLeaseRecord,
   type DeliveryFailureCode,
@@ -796,7 +797,11 @@ export class OutboxProcessor {
       externalConversationId: delivery.externalConversationId,
       messageType: message.messageType,
       content: message.content,
-      media: null,
+      // The handle the API uploaded under, read off the message row: this loop
+      // has no object storage and no adapter of its own, so the row is the only
+      // place a retry can learn what to send. A text message resolves to `null`
+      // and the providers are handed nothing, which is what they expect.
+      media: providerMediaOf(message),
       // The delivery is the correlation id, exactly as on the API path: one
       // logical message, one provider-facing identity, however many attempts.
       correlationId: delivery.id,

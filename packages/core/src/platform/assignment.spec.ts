@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   AGENT_AVAILABILITY_STATUSES,
   AGENT_PRESENCE_TTL_MS,
+  DEFAULT_ASSIGNMENT_WEIGHT,
   effectiveAvailabilityStatus,
   assignmentAudience,
   assignmentEligibility,
@@ -11,6 +12,7 @@ import {
   isAssignmentDue,
   isOfflineFallback,
   isPresenceLive,
+  isValidAssignmentWeight,
   planAutoAssign,
   selectAutoAssignee,
   transferTargetRefusal,
@@ -32,6 +34,7 @@ function candidate(overrides: Partial<AssignmentCandidate> = {}): AssignmentCand
     status: 'accepting',
     heartbeatAt: NOW,
     inProgressCount: 0,
+    weight: DEFAULT_ASSIGNMENT_WEIGHT,
     ...overrides,
   };
 }
@@ -267,6 +270,124 @@ describe('choosing the assignee', () => {
 
   it('returns nothing when the store has no seats at all', () => {
     expect(selectAutoAssignee([], 'store-1', NOW)).toBeUndefined();
+  });
+});
+
+describe('分流权重', () => {
+  it('divides the load by the weight instead of comparing it raw', () => {
+    // The busier seat carries the heavier weight, so its share of the queue is
+    // already the smaller one and the next conversation is its.
+    const chosen = selectAutoAssignee(
+      [
+        candidate({ memberId: 'u-a', inProgressCount: 2, weight: 3 }),
+        candidate({ memberId: 'u-b', inProgressCount: 1, weight: 1 }),
+      ],
+      'store-1',
+      NOW,
+    );
+    expect(chosen?.memberId).toBe('u-a');
+  });
+
+  it('reduces to fewest-in-progress when every weight is equal', () => {
+    const chosen = selectAutoAssignee(
+      [
+        candidate({ memberId: 'u-a', inProgressCount: 4, weight: 2 }),
+        candidate({ memberId: 'u-b', inProgressCount: 1, weight: 2 }),
+      ],
+      'store-1',
+      NOW,
+    );
+    expect(chosen?.memberId).toBe('u-b');
+  });
+
+  it('reads the weight as a ratio, so 60/40 and 6/4 are the same policy', () => {
+    const wide = selectAutoAssignee(
+      [
+        candidate({ memberId: 'u-a', inProgressCount: 4, weight: 60 }),
+        candidate({ memberId: 'u-b', inProgressCount: 2, weight: 40 }),
+      ],
+      'store-1',
+      NOW,
+    );
+    const narrow = selectAutoAssignee(
+      [
+        candidate({ memberId: 'u-a', inProgressCount: 4, weight: 6 }),
+        candidate({ memberId: 'u-b', inProgressCount: 2, weight: 4 }),
+      ],
+      'store-1',
+      NOW,
+    );
+    expect(wide?.memberId).toBe('u-b');
+    expect(narrow?.memberId).toBe(wide?.memberId);
+  });
+
+  it('skips a seat weighted zero even when it is the idlest', () => {
+    const chosen = selectAutoAssignee(
+      [
+        candidate({ memberId: 'u-a', inProgressCount: 0, weight: 0 }),
+        candidate({ memberId: 'u-b', inProgressCount: 5, weight: 1 }),
+      ],
+      'store-1',
+      NOW,
+    );
+    expect(chosen?.memberId).toBe('u-b');
+  });
+
+  it('finds nobody when every eligible seat weighs zero', () => {
+    expect(
+      selectAutoAssignee(
+        [
+          candidate({ memberId: 'u-a', inProgressCount: 0, weight: 0 }),
+          candidate({ memberId: 'u-b', inProgressCount: 0, weight: 0 }),
+        ],
+        'store-1',
+        NOW,
+      ),
+    ).toBeUndefined();
+  });
+
+  it('leaves a zero-weight seat available for a manual transfer', () => {
+    // The weight governs the dispatcher only. Naming a seat by hand is a
+    // different act, and an administrator who took a seat out of the rotation did
+    // not forbid sending it work.
+    expect(
+      transferTargetRefusal({
+        target: candidate({ memberId: 'u-a', weight: 0 }),
+        conversationStoreId: 'store-1',
+        now: NOW,
+      }),
+    ).toBeUndefined();
+  });
+
+  it('breaks an exact tie on member id rather than on rounding', () => {
+    // 3/7 and 6/14 are the same load. Comparing quotients as floats could order
+    // them by a difference that is not a difference, so the id decides.
+    const chosen = selectAutoAssignee(
+      [
+        candidate({ memberId: 'u-b', inProgressCount: 6, weight: 14 }),
+        candidate({ memberId: 'u-a', inProgressCount: 3, weight: 7 }),
+      ],
+      'store-1',
+      NOW,
+    );
+    expect(chosen?.memberId).toBe('u-a');
+  });
+});
+
+describe('isValidAssignmentWeight', () => {
+  it('accepts a whole number of shares, including none', () => {
+    expect(isValidAssignmentWeight(0)).toBe(true);
+    expect(isValidAssignmentWeight(1)).toBe(true);
+    expect(isValidAssignmentWeight(1000)).toBe(true);
+  });
+
+  it('refuses a fraction, a negative, an out-of-range number and a non-number', () => {
+    expect(isValidAssignmentWeight(1.5)).toBe(false);
+    expect(isValidAssignmentWeight(-1)).toBe(false);
+    expect(isValidAssignmentWeight(1001)).toBe(false);
+    expect(isValidAssignmentWeight('3')).toBe(false);
+    expect(isValidAssignmentWeight(undefined)).toBe(false);
+    expect(isValidAssignmentWeight(Number.NaN)).toBe(false);
   });
 });
 

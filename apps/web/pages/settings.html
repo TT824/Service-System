@@ -1,4 +1,4 @@
-<!-- 商家管理员：渠道、自动回复和成员 -->
+<!-- 客服、商家管理员、平台管理员：企业微信渠道连接与客服账号（渠道接入对客服隐藏） -->
 <section id="settings" class="page">
   <div class="page-header">
     <div>
@@ -6,19 +6,20 @@
         设置
       </h1>
       <div class="page-desc">
-        配置店铺的微信客服接入、基础自动回复与成员权限。
+        配置企业微信「微信客服」渠道连接，并维护可接待的客服账号。
       </div>
     </div>
+    <span id="settings-access-badge" class="knowledge-access-badge readonly">
+      只读
+    </span>
   </div>
-  <div class="panel">
+  <div class="panel" id="settings-channel-panel">
     <div class="panel-head">
       <span class="panel-title">
         渠道连接
       </span>
-      <span class="pill green">
-        <span class="live-dot">
-        </span>
-        已连接
+      <span id="settings-channel-state" class="pill gray">
+        未读取
       </span>
     </div>
     <div class="setting-row">
@@ -26,125 +27,136 @@
         <div class="setting-title">
           企业微信 · 微信客服
         </div>
-        <div class="setting-desc">
-          当前授权客服账号：小唛生活旗舰店客服。首版仅接入此渠道。
+        <div class="setting-desc" id="settings-channel-desc">
+          正在读取渠道状态…
         </div>
       </div>
-      <button class="btn" data-demo="查看连接详情">
-        查看连接
+      <button class="btn" id="settings-channel-refresh" type="button">
+        刷新状态
       </button>
     </div>
+    <!-- 五个值一次提交给后端，由后端拿去换 token 并回报「连上/没连上」。
+         密钥只在提交时经过浏览器，不回显、不落本地存储。 -->
+    <form id="settings-channel-form" class="settings-form">
+      <p class="settings-form-note" id="settings-channel-note">
+        以下五项从企业微信后台读出后填入，保存时后端会立即用它们换取 access_token，并回报真实连接结果。
+      </p>
+      <div class="settings-form-grid">
+        <div class="settings-field">
+          <label for="settings-wecom-corp">
+            企业 ID（CorpID）
+          </label>
+          <input id="settings-wecom-corp" class="field" autocomplete="off" spellcheck="false" placeholder="我的企业 · 企业 ID">
+        </div>
+        <div class="settings-field">
+          <label for="settings-wecom-open-kfid">
+            客服账号 ID（open_kfid）
+          </label>
+          <input id="settings-wecom-open-kfid" class="field" autocomplete="off" spellcheck="false" placeholder="微信客服 · 客服账号 ID">
+        </div>
+        <div class="settings-field">
+          <label for="settings-wecom-secret">
+            微信客服 Secret
+          </label>
+          <input id="settings-wecom-secret" class="field" type="password" autocomplete="new-password" placeholder="保存后不再回显，重新填写即覆盖">
+        </div>
+        <div class="settings-field">
+          <label for="settings-wecom-token">
+            回调 Token
+          </label>
+          <input id="settings-wecom-token" class="field" autocomplete="off" spellcheck="false" placeholder="接收消息 · Token">
+        </div>
+        <div class="settings-field">
+          <label for="settings-wecom-aes">
+            回调 EncodingAESKey
+          </label>
+          <input id="settings-wecom-aes" class="field" type="password" autocomplete="new-password" placeholder="接收消息 · EncodingAESKey">
+        </div>
+        <div class="settings-field">
+          <label for="settings-wecom-callback">
+            回调 URL（填回企业微信后台）
+          </label>
+          <input id="settings-wecom-callback" class="field" readonly aria-readonly="true">
+        </div>
+        <!-- 自检要问的是「企业微信将来会请求的那个地址」，它不一定等于上面按当前
+             打开方式推导出的地址：用内网地址打开控制台时不是，前面挂了域名或网关
+             时也可能多一层路径。所以这一项可编辑，默认填上面的值供直接改。 -->
+        <div class="settings-field" id="settings-wecom-selfcheck-field">
+          <label for="settings-wecom-selfcheck-url">
+            公网回调 URL（自检用）
+          </label>
+          <input id="settings-wecom-selfcheck-url" class="field" autocomplete="off" spellcheck="false" placeholder="https://部署域名/api/v1/channels/wecom/callback">
+        </div>
+      </div>
+      <p class="settings-form-help">
+        企业微信会先请求回调 URL 校验签名，通过后才把客户消息推过来。地址随部署环境变化，请以本页显示的为准。
+      </p>
+      <p class="settings-form-help">
+        顺序很重要：先在上面填好五项并「保存并连接」，再去企业微信后台登记这个地址——登记那一刻企业微信就会请求它，校验用的正是你刚保存的回调 Token 与 EncodingAESKey，凭证没保存就去登记会一直验证失败。地址必须是企业微信能访问到的公网 HTTPS 地址；如果你现在是用内网地址打开控制台，这里显示的不是该登记的那一个。
+      </p>
+      <p class="settings-form-help" id="settings-wecom-selfcheck-help">
+        填好上面那项后可以「自检回调地址」：服务端会拿已保存的凭证，按企业微信的方式请求这个地址，并校验它是否原样返回明文。企业微信后台点「保存」之前就能知道登记会不会通过；失败时给出的原因会指明卡在哪一步。这一步会由服务器发起一次真实的外部请求，只对平台超级管理员开放，且只接受 HTTPS 公网地址。
+      </p>
+      <p class="settings-form-error" id="settings-channel-error" role="alert">
+      </p>
+      <p class="settings-form-ok" id="settings-wecom-selfcheck-result" role="status">
+      </p>
+      <div class="settings-form-actions">
+        <button class="btn" id="settings-wecom-selfcheck" type="button">
+          自检回调地址
+        </button>
+        <button class="btn primary" id="settings-channel-save" type="submit">
+          保存并连接
+        </button>
+      </div>
+    </form>
   </div>
   <div class="panel">
     <div class="panel-head">
       <span class="panel-title">
-        基础自动回复
+        客服账号
       </span>
-    </div>
-    <div class="setting-row">
-      <div>
-        <div class="setting-title">
-          欢迎语
-        </div>
-        <div class="setting-desc">
-          客户进入会话时发送一次。实际外发额度计数需按渠道验证结果配置。
-        </div>
-      </div>
-      <button class="btn" data-demo="编辑欢迎语">
-        编辑
+      <button class="btn" id="settings-member-add" type="button">
+        ＋ 新建客服账号
       </button>
     </div>
-    <div class="setting-row">
-      <div>
-        <div class="setting-title">
-          离线回复
-        </div>
-        <div class="setting-desc">
-          全店无人在线接单时发送一次；系统将在有客服在线后分配会话。
-        </div>
-      </div>
-      <button class="btn" data-demo="编辑离线回复">
-        编辑
-      </button>
+    <div class="table-scroll">
+      <table class="table">
+        <thead>
+          <tr>
+            <th>
+              登录账号
+            </th>
+            <th>
+              显示名
+            </th>
+            <th>
+              角色
+            </th>
+            <th>
+              所属门店
+            </th>
+            <th>
+              状态
+            </th>
+            <th>
+              操作
+            </th>
+          </tr>
+        </thead>
+        <tbody id="settings-member-body">
+          <tr>
+            <td colspan="6" class="empty">
+              请登录后查看客服账号
+            </td>
+          </tr>
+        </tbody>
+      </table>
     </div>
+    <p class="settings-form-help" id="settings-member-note">
+      只有「已启用」的账号参与自动分配；停用后不再接新会话，进行中的会话不受影响。
+    </p>
   </div>
-  <div class="panel">
-    <div class="panel-head">
-      <span class="panel-title">
-        客服成员与店铺范围
-      </span>
-      <button class="btn" data-demo="添加客服成员">
-        添加成员
-      </button>
-    </div>
-    <table class="table">
-      <thead>
-        <tr>
-          <th>
-            成员
-          </th>
-          <th>
-            角色
-          </th>
-          <th>
-            可访问店铺
-          </th>
-          <th>
-            当前状态
-          </th>
-          <th>
-            操作
-          </th>
-        </tr>
-      </thead>
-      <tbody>
-        <tr>
-          <td>
-            <strong>
-              陈小雨
-            </strong>
-          </td>
-          <td>
-            <span id="settings-role-chen">客服</span>
-          </td>
-          <td>
-            旗舰店、家居店
-          </td>
-          <td>
-            <span class="pill green">
-              在线接单
-            </span>
-          </td>
-          <td>
-            <button class="small-link" type="button" data-admin-permissions="chen">
-              编辑
-            </button>
-          </td>
-        </tr>
-        <tr>
-          <td>
-            <strong>
-              王一帆
-            </strong>
-          </td>
-          <td>
-            <span id="settings-role-wang">客服</span>
-          </td>
-          <td>
-            旗舰店
-          </td>
-          <td>
-            <span class="pill orange">
-              挂起
-            </span>
-          </td>
-          <td>
-            <button class="small-link" type="button" data-admin-permissions="wang">
-              编辑
-            </button>
-          </td>
-        </tr>
-      </tbody>
-    </table>
-  </div>
+  <!-- 会话分流原来挂在这一页，2026-10-08 并进「管理员中心 → 员工分流」，这里整块
+       删掉：分单比例只留一处入口，免得两页各改一半、口径分叉。 -->
 </section>

@@ -242,6 +242,24 @@ export class InMemoryAuthRepository implements AuthRepository {
     this.#links.set(link.id, clone(link));
   }
 
+  /** @inheritdoc */
+  async listMemberAvatars(
+    memberIds: ReadonlyArray<string>,
+  ): Promise<ReadonlyMap<string, string>> {
+    const wanted = new Set(memberIds);
+    const avatars = new Map<string, string>();
+    for (const link of this.#links.values()) {
+      if (!wanted.has(link.memberId) || link.revokedAt !== null) {
+        continue;
+      }
+      const avatar = this.#users.get(link.userId)?.avatarUrl ?? null;
+      if (avatar !== null) {
+        avatars.set(link.memberId, avatar);
+      }
+    }
+    return avatars;
+  }
+
   // --------------------------------------------------------------------------
   // Trial workspace
   // --------------------------------------------------------------------------

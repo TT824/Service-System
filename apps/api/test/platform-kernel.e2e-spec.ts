@@ -451,9 +451,11 @@ describe('Platform kernel (interface)', () => {
       .get('/api/v1/conversations/conversation-acme-2')
       .set('x-member-id', 'u-t1-agent-2')
       .expect(200);
-    const holderVersion = ((holder2.body as DataEnvelope).data as {
-      conversation: { version: number };
-    }).conversation.version;
+    const holderVersion = (
+      (holder2.body as DataEnvelope).data as {
+        conversation: { version: number };
+      }
+    ).conversation.version;
     await request(app.getHttpServer())
       .post('/api/v1/conversations/conversation-acme-2/return')
       .set('x-member-id', 'u-t1-agent-2')

@@ -3,6 +3,7 @@ import {
   buildRealtimeEvent,
   type AgentPresence,
   type Conversation,
+  type InternalMessage,
   type Message,
   type MessageDeliveryStatus,
   type RealtimeEvent,
@@ -183,6 +184,34 @@ export class RealtimeService {
         },
       },
       presence,
+      now,
+    );
+  }
+
+  /**
+   * Announce a message written in an internal (colleague-to-colleague) thread.
+   *
+   * Published tenant-wide, with no store: an internal thread is not a store's
+   * fact, and the two participants may sit in different stores. Every seat in
+   * the tenant therefore receives the nudge, and each one re-reads only its own
+   * threads — so what a non-participant learns is that somebody wrote something
+   * to somebody, never what. The body deliberately stays out of the frame.
+   *
+   * @param message - The message as committed.
+   * @param now - Instant of the write (ISO).
+   * @returns The published frame.
+   */
+  internalMessageCreated(message: InternalMessage, now?: string): RealtimeEvent {
+    return this.publish(
+      {
+        event_type: 'internal.message.created',
+        data: {
+          thread_id: message.threadId,
+          message_id: message.id,
+          sender_member_id: message.senderMemberId,
+        },
+      },
+      { tenantId: message.tenantId, storeId: null },
       now,
     );
   }

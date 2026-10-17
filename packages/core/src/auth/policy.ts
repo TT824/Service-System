@@ -7,7 +7,7 @@
  * functions so the `pending_config` boundary is testable on its own.
  */
 
-import type { AccessState, AccountStatus, DeviceStatus, TrustedDevice } from './types';
+import type { AccessState, AccountStatus, DeviceStatus, TrustedDevice, UserAccount } from './types';
 
 /** One-time code policy. */
 export type OtpPolicy = {
@@ -77,7 +77,11 @@ export const DEFAULT_AUTH_POLICY: AuthPolicy = Object.freeze({
     resendCooldownMs: MINUTE,
   }),
   password: Object.freeze({
-    maxFailedLogins: 5,
+    // Three strikes, not five: this is a self-hosted deployment reached by a
+    // handful of known staff, and a five-attempt budget mostly locked out the
+    // person who mistyped, not an attacker. The counter is still cleared by a
+    // successful sign-in — see `loginWithPassword`.
+    maxFailedLogins: 3,
     lockMs: 15 * MINUTE,
   }),
   session: Object.freeze({
@@ -136,6 +140,39 @@ export function isDeviceUsable(
   nowIso: string,
 ): boolean {
   return effectiveDeviceStatus(device, nowIso) === 'active';
+}
+
+/**
+ * The status an account really has right now.
+ *
+ * A lock is a read-time fact, exactly like device expiry above: nothing sweeps
+ * the table when `locked_until` passes, so the row keeps reading `locked` until
+ * the next *successful* sign-in rewrites it to `active`. Taking that stored value
+ * verbatim would keep a session that is already signed in out of every business
+ * surface long after the lock lapsed, which contradicts the rule
+ * {@link deriveAccessState} states for it — a locked account cannot act "until
+ * the lock expires". A lock therefore holds only while its instant is still
+ * ahead.
+ *
+ * A `locked` row with no instant is treated as unlocked, matching the sign-in
+ * check, which refuses to lock an account it cannot date.
+ *
+ * @param account - Stored account fields that decide usability.
+ * @param nowIso - Current instant.
+ * @returns `locked` while the lock holds, `active` once it has lapsed, and every
+ * other stored status unchanged.
+ */
+export function effectiveAccountStatus(
+  account: Pick<UserAccount, 'status' | 'lockedUntil'>,
+  nowIso: string,
+): AccountStatus {
+  if (account.status !== 'locked') {
+    return account.status;
+  }
+  if (account.lockedUntil === null) {
+    return 'active';
+  }
+  return Date.parse(account.lockedUntil) > Date.parse(nowIso) ? 'locked' : 'active';
 }
 
 /** Facts the access state is derived from. */

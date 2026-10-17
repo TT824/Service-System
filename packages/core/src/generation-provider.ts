@@ -1,6 +1,6 @@
 /**
- * The generation provider boundary: a question and the knowledge that may answer
- * it in, anchored drafts out.
+ * The generation provider boundary: a question, the conversation it was asked
+ * in, and the knowledge that may answer it in, anchored drafts out.
  *
  * This is the second thing in this repository that is not ours — the embedding
  * service is the first — and it sits on the same kind of seam for the same
@@ -62,12 +62,46 @@ export type GenerationKnowledgeEntry = {
   readonly content: string;
 };
 
+/**
+ * One earlier message of the conversation, as the model is allowed to see it.
+ *
+ * The roles are `customer` and `agent` rather than the chat-completion pair, and
+ * the reason is the anchoring rule above: an agent's line is a transcript of what
+ * somebody at the shop said — possibly a draft from an earlier call, possibly
+ * hand-typed — and a model handed it as its own `assistant` turn reads itself as
+ * mid-conversation, free to continue what it started. Labelled as transcript
+ * lines instead, the history stays what it is: evidence about the conversation,
+ * used to resolve 「这个」 and 「还有别的颜色吗」, while every draft still has to name
+ * an entry this request supplied.
+ *
+ * No id and no timestamp: nothing downstream cites a turn, so carrying either
+ * would only invite one to.
+ */
+export type GenerationTurn = {
+  /** Who said it. `agent` is anybody at the shop, not necessarily this seat. */
+  readonly role: 'customer' | 'agent';
+  /** What was said, verbatim. Masked like everything else the model sees. */
+  readonly content: string;
+};
+
 /** What a generation provider is asked for. */
 export type GenerationRequest = {
   /** The customer's question, verbatim. */
   readonly query: string;
   /** The recalled entries the drafts may be built from, best first. */
   readonly knowledge: ReadonlyArray<GenerationKnowledgeEntry>;
+  /**
+   * The conversation's recent messages, oldest first, ending where the question
+   * begins. Bounded by the caller, which is the only side that knows what a
+   * conversation is and how much of it is worth paying for twice.
+   *
+   * This is the widest untrusted text this port ever forwards: an entry is
+   * curated and a question is one message, while a transcript is written by
+   * customers and by whoever was at the desk. Handled as context and never as
+   * instruction — see the prompt in the DeepSeek implementation, which says so
+   * in as many words.
+   */
+  readonly history: ReadonlyArray<GenerationTurn>;
   /** How many drafts to ask for. */
   readonly limit: number;
 };
@@ -102,8 +136,8 @@ export interface GenerationProvider {
   /**
    * Write drafts for one question from the knowledge given.
    *
-   * @param request - The question, the entries that may be used, and how many
-   *   drafts to ask for.
+   * @param request - The question, the recent turns that led to it, the entries
+   *   that may be used, and how many drafts to ask for.
    * @returns The drafts that named a supplied entry, or a reported failure.
    */
   generate(request: GenerationRequest): Promise<GenerationResult>;

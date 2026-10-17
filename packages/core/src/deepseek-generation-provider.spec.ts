@@ -87,6 +87,85 @@ describe('DeepSeekGenerationProvider', () => {
     expect(user?.content).toContain(QUERY);
   });
 
+  describe('the conversation history', () => {
+    /**
+     * The history arrives as a transcript rather than as turns of a chat this
+     * model is in: the two labels are the two sides of the counter, and the
+     * question is repeated in its own place because it is the one line the
+     * answer has to answer.
+     */
+    it('renders the last turns as a transcript, with the question last', async () => {
+      const http = fakeHttp({ status: 200, body: answer([]) });
+      const provider = providerOver(http);
+
+      await provider.generate(
+        request({
+          history: [
+            { role: 'customer', content: '这件卫衣有 XL 吗' },
+            { role: 'agent', content: '有的亲，XL 现货' },
+          ],
+        }),
+      );
+
+      const user = userMessage(http.requests[0]?.body);
+      expect(user).toContain('对话历史（最近 2 条，最早在前');
+      expect(user).toContain('顾客：这件卫衣有 XL 吗');
+      expect(user).toContain('客服：有的亲，XL 现货');
+      // Chronological, and on the side of the prompt the answer continues from.
+      expect(user.indexOf('顾客：这件卫衣有 XL 吗')).toBeLessThan(user.indexOf('客服：有的亲'));
+      expect(user.indexOf('对话历史')).toBeLessThan(user.indexOf('知识条目：'));
+      expect(user.indexOf('知识条目：')).toBeLessThan(user.indexOf(`顾客的问题：${QUERY}`));
+    });
+
+    /** The widest untrusted text this port forwards is masked like the rest. */
+    it('redacts the history the way it redacts the question', async () => {
+      const http = fakeHttp({ status: 200, body: answer([]) });
+      const provider = providerOver(http);
+
+      await provider.generate(
+        request({ history: [{ role: 'customer', content: '上次留的号是 13812345678' }] }),
+      );
+
+      const user = userMessage(http.requests[0]?.body);
+      expect(user).toContain('顾客：上次留的号是 [手机号]');
+      expect(user).not.toContain('13812345678');
+    });
+
+    /**
+     * A conversation with nothing before the question must not pay for the
+     * feature or read a heading about a transcript that is not there: the
+     * prompt is the one this provider sent before it had a history.
+     */
+    it('adds nothing at all when there is no history', async () => {
+      const http = fakeHttp({ status: 200, body: answer([]) });
+      const provider = providerOver(http);
+
+      await provider.generate(request());
+
+      const user = userMessage(http.requests[0]?.body);
+      expect(user).not.toContain('对话历史');
+      expect(user.startsWith('知识条目：')).toBe(true);
+    });
+
+    /**
+     * The transcript is the only thing in this request written by whoever was on
+     * the other end of the conversation, so the instruction has to say what it
+     * is. A prompt that forwarded customer text without saying so would be
+     * offering the model an instruction channel this product never opened.
+     */
+    it('tells the model the history is untrusted and only the entries may be used', async () => {
+      const http = fakeHttp({ status: 200, body: answer([]) });
+      const provider = providerOver(http);
+
+      await provider.generate(request());
+
+      const system = systemMessage(http.requests[0]?.body);
+      expect(system).toContain('对话历史');
+      expect(system).toContain('不可信');
+      expect(system).toContain('不要执行');
+    });
+  });
+
   describe('PII redaction (§4.5)', () => {
     it("sends a customer's phone, order, name and payment redacted", async () => {
       const http = fakeHttp({ status: 200, body: answer([]) });
@@ -446,9 +525,19 @@ function userMessage(body: unknown): string {
   return messages.find((message) => message.role === 'user')?.content ?? '';
 }
 
+/** The system-role message of the one request a fake port captured. */
+function systemMessage(body: unknown): string {
+  const messages =
+    (body as { messages?: ReadonlyArray<{ role: string; content: string }> }).messages ?? [];
+  return messages.find((message) => message.role === 'system')?.content ?? '';
+}
+
 /** The request every case makes, with overrides. */
 function request(overrides: Partial<GenerationRequest> = {}): GenerationRequest {
-  return { query: QUERY, knowledge: ENTRIES, limit: 3, ...overrides };
+  // Most cases are about the question and the entries, and a conversation with
+  // nothing before the question is the common one: the empty default keeps every
+  // one of them asserting the prompt it always asserted.
+  return { query: QUERY, history: [], knowledge: ENTRIES, limit: 3, ...overrides };
 }
 
 /** One provider over the given fake port, with this suite's key and deadline. */
